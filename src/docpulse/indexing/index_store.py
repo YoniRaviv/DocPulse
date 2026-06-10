@@ -3,6 +3,7 @@ from pathlib import Path
 import pathspec
 
 from docpulse.config import Config
+from docpulse.indexing.chunk_rules import rules_for_path
 from docpulse.indexing.code_chunker import chunk_source
 from docpulse.indexing.doc_parser import parse_markdown
 from docpulse.indexing.embeddings import Embedder
@@ -52,6 +53,7 @@ def build_index(root: Path, config: Config, embedder: Embedder | None, base_comm
     chunks = [
         chunk
         for rel in _code_files(root, config)
+        if rules_for_path(rel) is not None
         for chunk in chunk_source(rel, (root / rel).read_text())
     ]
     sections = [
@@ -79,6 +81,8 @@ def update_index(
         if rel.endswith(".md"):
             sections.extend(parse_markdown(rel, file_path.read_text()))
         else:
+            if rules_for_path(rel) is None:
+                continue  # unsupported file type: don't read
             chunks.extend(chunk_source(rel, file_path.read_text()))
     return Index(
         version=1, base_commit=base_commit, chunks=chunks, sections=sections,

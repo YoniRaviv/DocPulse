@@ -44,3 +44,17 @@ def test_incremental_update_recomputes_only_changed_files(tmp_path):
     assert updated.base_commit == "def"
     # unchanged docs were not re-parsed away
     assert any(s.id == "docs/auth.md#auth" for s in updated.sections)
+
+
+def test_binary_files_in_code_globs_are_skipped(tmp_path):
+    write_repo(tmp_path)
+    (tmp_path / "src" / "icon.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\xff")
+    index = build_index(tmp_path, make_config(), embedder=None, base_commit="abc")
+    assert any(c.id == "src/auth.py::AuthService.login" for c in index.chunks)
+
+    (tmp_path / "src" / "icon.png").write_bytes(b"\x89PNG\xff\xfe")
+    updated = update_index(
+        index, tmp_path, make_config(), embedder=None,
+        changed_paths=["src/icon.png"], base_commit="def",
+    )
+    assert updated.base_commit == "def"
