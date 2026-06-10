@@ -47,3 +47,44 @@ def test_decorated_method_includes_decorator():
     assert create.start_line == 2
     assert create.signature == "def create(cls):"
     assert create.kind == "method"
+
+
+TS = """\
+export function formatPrice(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+export class CartService {
+  addItem(sku: string): void {}
+}
+
+export interface CartItem {
+  sku: string;
+}
+"""
+
+CS = """\
+namespace Shop {
+    public interface IPricer {
+        decimal Price(string sku);
+    }
+
+    public class Cart {
+        public void AddItem(string sku) {}
+    }
+}
+"""
+
+
+def test_typescript_chunks():
+    by_id = {c.id: c for c in chunk_source("src/cart.ts", TS)}
+    assert by_id["src/cart.ts::formatPrice"].kind == "function"
+    assert by_id["src/cart.ts::CartService.addItem"].kind == "method"
+    assert by_id["src/cart.ts::CartItem"].kind == "interface"
+
+
+def test_csharp_chunks():
+    by_id = {c.id: c for c in chunk_source("src/Cart.cs", CS)}
+    assert by_id["src/Cart.cs::IPricer"].kind == "interface"
+    assert by_id["src/Cart.cs::Cart.AddItem"].kind == "method"
+    assert by_id["src/Cart.cs::Cart"].kind == "class"
