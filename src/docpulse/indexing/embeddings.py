@@ -21,8 +21,8 @@ class Embedder:
             response = litellm.embedding(
                 model=self.model, input=[texts_by_hash[h] for h in missing]
             )
-            for h, item in zip(missing, response.data):
-                self._cache[h] = item["embedding"]
+            for position, item in enumerate(response.data):
+                self._cache[missing[item.get("index", position)]] = item["embedding"]
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
             self.cache_path.write_text(json.dumps(self._cache))
         return {h: np.array(self._cache[h]) for h in texts_by_hash}
