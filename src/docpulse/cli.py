@@ -19,9 +19,12 @@ def _main() -> None:
 
 
 def _head_commit(root: Path) -> str:
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True
-    )
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, timeout=5
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return "unknown"
     return result.stdout.strip() if result.returncode == 0 else "unknown"
 
 
