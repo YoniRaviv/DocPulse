@@ -15,7 +15,8 @@ def chunk_source(path: str, source: str) -> list[CodeChunk]:
     tree = get_parser(grammar).parse_bytes(src_bytes)
     chunks: list[CodeChunk] = []
 
-    def visit(node, name_stack: list[str]) -> None:  # type: ignore[type-arg]
+    # Each stack element is (name, kind) so we can check the enclosing scope's kind.
+    def visit(node, name_stack: list[tuple[str, str]]) -> None:  # type: ignore[type-arg]
         kind = rules.node_kinds.get(node.kind())
         next_stack = name_stack
         if kind is not None:
@@ -23,11 +24,32 @@ def chunk_source(path: str, source: str) -> list[CodeChunk]:
             if name_node is not None:
                 name_br = name_node.byte_range()
                 name = src_bytes[name_br.start:name_br.end].decode()
-                if kind == "function" and name_stack:
+                # Only promote function→method when the immediate enclosing named
+                # scope is a class (not another function).
+                if kind == "function" and name_stack and name_stack[-1][1] == "class":
                     kind = "method"
-                qualified = ".".join([*name_stack, name])
+                qualified = ".".join([s[0] for s in name_stack] + [name])
+                # Bug 2: if this definition node is wrapped in a decorated_definition,
+                # use the parent's byte range and start_position for content/start_line,
+                # but derive signature from the inner def's own first content line.
+                parent = node.parent()
+                if parent is not None and parent.kind() == "decorated_definition":
+                    outer_br = parent.byte_range()
+                    content = src_bytes[outer_br.start:outer_br.end].decode()
+                    start_line = parent.start_position().row + 1
+                    end_line = max(
+                        parent.end_position().row + 1,
+                        node.end_position().row + 1,
+                    )
+                else:
+                    node_br = node.byte_range()
+                    content = src_bytes[node_br.start:node_br.end].decode()
+                    start_line = node.start_position().row + 1
+                    end_line = node.end_position().row + 1
+                # Signature always comes from the inner definition node's first line.
                 node_br = node.byte_range()
-                content = src_bytes[node_br.start:node_br.end].decode()
+                inner_content = src_bytes[node_br.start:node_br.end].decode()
+                signature = inner_content.splitlines()[0].strip()
                 chunks.append(
                     CodeChunk(
                         id=f"{path}::{qualified}",
@@ -35,14 +57,14 @@ def chunk_source(path: str, source: str) -> list[CodeChunk]:
                         language=rules.language,
                         kind=kind,
                         name=qualified,
-                        signature=content.splitlines()[0].strip(),
+                        signature=signature,
                         content=content,
                         content_hash=hashlib.sha256(content.encode()).hexdigest(),
-                        start_line=node.start_position().row + 1,
-                        end_line=node.end_position().row + 1,
+                        start_line=start_line,
+                        end_line=end_line,
                     )
                 )
-                next_stack = [*name_stack, name]
+                next_stack = [*name_stack, (name, kind)]
         for i in range(node.child_count()):
             visit(node.child(i), next_stack)
 
