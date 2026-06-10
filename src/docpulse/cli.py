@@ -13,6 +13,11 @@ app = typer.Typer(
 )
 
 
+@app.callback()
+def _main() -> None:
+    """DocPulse — docs that stay in sync with the heartbeat of the codebase."""
+
+
 def _head_commit(root: Path) -> str:
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True
@@ -40,9 +45,3 @@ def index(
         f"indexed {len(result.chunks)} chunks, {len(result.sections)} sections, "
         f"{len(result.links)} links"
     )
-
-
-@app.command("version")
-def version() -> None:
-    """Show the DocPulse version."""
-    typer.echo("0.1.0")
