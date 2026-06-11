@@ -48,12 +48,34 @@ def _range(start: int, count: int | None) -> tuple[int, int] | None:
     return (start, start + n - 1) if n > 0 else None
 
 
-def diff_range(root: Path, base: str, head: str = "HEAD") -> list[FileDiff]:
-    """Parse `git diff -U0 base..head` into per-file changed line ranges."""
+def _has_merge_base(root: Path, base: str, head: str) -> bool:
+    """True when base and head share a common ancestor (so `...` is valid)."""
+    result = subprocess.run(
+        ["git", "merge-base", base, head],
+        cwd=root,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def diff_range(
+    root: Path, base: str, head: str = "HEAD", three_dot: bool = True
+) -> list[FileDiff]:
+    """Parse `git diff -U0` into per-file changed line ranges.
+
+    three_dot=True (default) diffs `base...head` — changes since the merge-base,
+    matching what a GitHub PR shows, so upstream commits the branch merely lacks
+    are not attributed to the PR. Falls back to two-dot `base..head` when base and
+    head have no common ancestor.
+    """
+    use_three_dot = three_dot and _has_merge_base(root, base, head)
+    spec = f"{base}...{head}" if use_three_dot else f"{base}..{head}"
     output = _git(
         root,
         "-c", "core.quotePath=false",
-        "diff", "--no-color", "--no-renames", "--unified=0", f"{base}..{head}",
+        "diff", "--no-color", "--no-renames", "--unified=0", spec,
     )
     diffs: list[FileDiff] = []
     old_path: str | None = None
