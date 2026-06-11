@@ -3,7 +3,7 @@ from pathlib import Path
 from docpulse.config import Config, DocGlob
 from docpulse.destinations.repo_markdown import RepoMarkdownDestination, replace_sections
 from docpulse.indexing.doc_parser import parse_markdown
-from docpulse.models import DocSection, RunResult, Verdict
+from docpulse.models import DocSection, Repair, RunResult, Verdict
 
 
 def test_replace_single_section():
@@ -94,3 +94,71 @@ def test_flag_comment_without_evidence_omits_evidence_suffix():
     comment = _dest([section]).flag_comment(result)
     assert "renamed" in comment
     assert "evidence:" not in comment  # no evidence -> no evidence suffix
+
+
+def test_build_fix_plan_groups_edits_and_routes(tmp_path):
+    (tmp_path / "docs").mkdir()
+    doc = tmp_path / "docs" / "auth.md"
+    doc.write_text("# Login\n\nCall login with a user.\n")
+    section = parse_markdown("docs/auth.md", doc.read_text())[0]
+
+    dest = RepoMarkdownDestination(
+        root=tmp_path,
+        sections_by_id={section.id: section},
+        config=Config(docs=[DocGlob(path="**/*.md")]),
+        head_sha="abcdef1234567890",
+    )
+    result = RunResult(
+        verdicts=[Verdict(section_id=section.id, status="stale", confidence=0.95,
+                          diagnosis="renamed", evidence=["auth.py:2"])],
+        repairs=[Repair(section_id=section.id, new_content="# Login\n\nCall login with a username.",
+                        confidence=0.95, validation_passed=True, rationale="user->username")],
+        suspects_checked=1, suspects_total=1, tokens_used=10, exit_code=1,
+    )
+    plan = dest.build_fix_plan(result)
+    assert plan is not None
+    assert plan.branch == "docpulse/fix-abcdef12"
+    assert "docs/auth.md" in plan.file_writes
+    assert "username" in plan.file_writes["docs/auth.md"]
+    assert "user->username" in plan.pr_body
+    assert ["gh", "pr", "create", "--title", plan.pr_title, "--body", plan.pr_body] in plan.commands
+
+
+def test_build_fix_plan_skips_failed_validation(tmp_path):
+    section = _section()
+    dest = RepoMarkdownDestination(
+        root=tmp_path, sections_by_id={section.id: section},
+        config=Config(docs=[DocGlob(path="**/*.md")]), head_sha="abc",
+    )
+    result = RunResult(
+        verdicts=[Verdict(section_id=section.id, status="stale", confidence=0.95,
+                          diagnosis="d", evidence=[])],
+        repairs=[Repair(section_id=section.id, new_content="x", confidence=0.95,
+                        validation_passed=False, rationale="failed")],  # route -> skip
+        suspects_checked=1, suspects_total=1, tokens_used=0, exit_code=1,
+    )
+    assert dest.build_fix_plan(result) is None
+
+
+def test_publish_fix_dry_run_returns_branch_without_running_commands(tmp_path):
+    (tmp_path / "docs").mkdir()
+    doc = tmp_path / "docs" / "auth.md"
+    doc.write_text("# Login\n\nCall login with a user.\n")
+    section = parse_markdown("docs/auth.md", doc.read_text())[0]
+    ran: list[list[str]] = []
+    dest = RepoMarkdownDestination(
+        root=tmp_path, sections_by_id={section.id: section},
+        config=Config(docs=[DocGlob(path="**/*.md")]), head_sha="abcdef1234567890",
+        run_command=lambda args: ran.append(args) or "", dry_run=True,
+    )
+    result = RunResult(
+        verdicts=[Verdict(section_id=section.id, status="stale", confidence=0.95,
+                          diagnosis="d", evidence=[])],
+        repairs=[Repair(section_id=section.id, new_content="# Login\n\nfixed",
+                        confidence=0.95, validation_passed=True, rationale="r")],
+        suspects_checked=1, suspects_total=1, tokens_used=0, exit_code=1,
+    )
+    branch = dest.publish_fix(result)
+    assert branch == "docpulse/fix-abcdef12"
+    assert ran == []  # dry-run: no git/gh commands executed
+    assert doc.read_text() == "# Login\n\nCall login with a user.\n"  # file untouched in dry-run

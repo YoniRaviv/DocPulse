@@ -1,9 +1,23 @@
+from dataclasses import dataclass
 from pathlib import Path
 
 from docpulse.command_runner import CommandRunner, default_runner
 from docpulse.config import Config
-from docpulse.models import DocSection, RunResult
+from docpulse.models import DocSection, Repair, RunResult
+from docpulse.repair.routing import route
 from docpulse.report.summary import render_summary
+
+
+@dataclass
+class FixPlan:
+    """The dry-run companion-PR plan. Phase 6 turns `commands` into real calls."""
+
+    branch: str
+    commit_message: str
+    pr_title: str
+    pr_body: str
+    file_writes: dict[str, str]   # repo-relative path -> full new file content
+    commands: list[list[str]]     # git/gh argv lists Phase 6 would execute
 
 
 def _content_lines(content: str) -> list[str]:
@@ -84,3 +98,67 @@ class RepoMarkdownDestination:
 
     def summarize(self, result: RunResult) -> None:
         print(render_summary(result))
+
+    def _routed_for_pr(self, result: RunResult) -> list[tuple[Repair, str]]:
+        """(repair, tier) pairs whose tier means 'include in the companion PR'."""
+        verdicts = {v.section_id: v for v in result.verdicts}
+        out: list[tuple[Repair, str]] = []
+        for repair_obj in result.repairs:
+            verdict = verdicts.get(repair_obj.section_id)
+            if verdict is None:
+                continue
+            tier = route(verdict, repair_obj, self.config)
+            if tier in ("auto_fix", "draft"):
+                out.append((repair_obj, tier))
+        return out
+
+    def build_fix_plan(self, result: RunResult) -> "FixPlan | None":
+        """Construct the companion-PR plan, or None if nothing is applyable."""
+        applied = self._routed_for_pr(result)
+        if not applied:
+            return None
+        edits_by_path: dict[str, list[tuple[DocSection, str]]] = {}
+        body_lines: list[str] = []
+        for repair_obj, tier in applied:
+            section = self.sections_by_id.get(repair_obj.section_id)
+            if section is None:
+                continue
+            edits_by_path.setdefault(section.path, []).append(
+                (section, repair_obj.new_content)
+            )
+            body_lines.append(f"- **{section.id}** ({tier}): {repair_obj.rationale}")
+        if not edits_by_path:
+            return None
+        file_writes: dict[str, str] = {}
+        for path, edits in edits_by_path.items():
+            original = (self.root / path).read_text()
+            file_writes[path] = replace_sections(original, edits)
+        branch = f"docpulse/fix-{self.head_sha[:8]}"
+        commit_message = "docs: sync stale sections (DocPulse)"
+        pr_title = "\U0001f4dd DocPulse: sync docs with code changes"
+        pr_body = "DocPulse detected and fixed stale documentation:\n\n" + "\n".join(body_lines)
+        commands = [
+            ["git", "checkout", "-b", branch],
+            *[["git", "add", path] for path in sorted(file_writes)],
+            ["git", "commit", "-m", commit_message],
+            ["git", "push", "-u", "origin", branch],
+            ["gh", "pr", "create", "--title", pr_title, "--body", pr_body],
+        ]
+        return FixPlan(branch, commit_message, pr_title, pr_body, file_writes, commands)
+
+    def publish_fix(self, result: RunResult) -> str:
+        """Dry-run: return the planned branch name without running any command.
+
+        Phase 6 will execute `plan.commands` (and write `plan.file_writes`) here
+        when `dry_run` is False.
+        """
+        plan = self.build_fix_plan(result)
+        if plan is None:
+            return ""
+        if self.dry_run:
+            return plan.branch
+        for path, new_text in plan.file_writes.items():
+            (self.root / path).write_text(new_text)
+        for command in plan.commands:
+            self.run_command(command)
+        return plan.branch
