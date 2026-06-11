@@ -24,3 +24,24 @@ and reports precision/recall. Positive class = `stale`; `unverified` counts as
 
 **Golden rule:** every real-world false positive becomes a new `accurate` case here.
 Cases must be hand-verified — a wrong label silently corrupts the metric.
+
+## Repair eval (Phase 4)
+
+`docpulse eval --cases evals/cases --model <m> --repair` additionally runs the
+repairer + validator over every **stale** case and reports repair quality:
+
+- **preservation** — fraction of the original section's paragraph blocks that
+  survive byte-identical in the repaired section (deterministic; the exit-gate
+  metric is "% of stale cases with preservation ≥ 0.95").
+- **surgical** — character-level fraction of the original text retained in the
+  repair (difflib); credits in-paragraph edits that `preservation` (whole-block)
+  misses. The more meaningful surgical-ness gate for small sections.
+- **tier** — `auto_fix` / `draft` / `skip` from confidence routing.
+- **rubric** — an LLM judge scores the repair against `reference_correction`
+  on accuracy / completeness / style-fidelity (1–5) and flags cases needing a
+  human spot-check.
+
+The repair eval **synthesizes** a stale verdict from each `label.yml` (it does
+not run the verifier), so it measures repair quality in isolation. Set
+`repair_model:` in `docpulse.yml` to use a different model for repair than for
+verify (falls back to `model:`).
