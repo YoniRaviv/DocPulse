@@ -61,14 +61,21 @@ def check(
     config_path: Path | None = typer.Option(None, "--config", help="Path to docpulse.yml"),
 ) -> None:
     """Diff base..head and print doc sections suspected stale (no LLM yet)."""
-    config = load_config(config_path or root / "docpulse.yml")
     index_path = root / ".docpulse" / "index.json"
     if not index_path.exists():
         typer.echo("no index found — run `docpulse index` first", err=True)
         raise typer.Exit(2)
-    index = load_index(index_path)
-    diffs = diff_range(root, base, head)
-    changed = meaningful_changed_chunks(root, diffs, config, base, head)
+    try:
+        config = load_config(config_path or root / "docpulse.yml")
+        index = load_index(index_path)
+        diffs = diff_range(root, base, head)
+        changed = meaningful_changed_chunks(root, diffs, config, base, head)
+    except FileNotFoundError as exc:
+        typer.echo(f"config not found: {exc.filename}", err=True)
+        raise typer.Exit(2) from exc
+    except RuntimeError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
     suspects, total = select_suspects(changed, index, config.budget.max_suspects_per_run)
     if not suspects:
         typer.echo("no suspect doc sections")

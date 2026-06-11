@@ -70,7 +70,10 @@ def _committed_fixture(tmp_path) -> tuple[Path, str]:
 
 def test_check_surfaces_linked_section_on_param_rename(tmp_path):
     repo, base = _committed_fixture(tmp_path)
-    runner.invoke(app, ["index", "--root", str(repo), "--heuristics-only", "--base-commit", base])
+    index_result = runner.invoke(
+        app, ["index", "--root", str(repo), "--heuristics-only", "--base-commit", base]
+    )
+    assert index_result.exit_code == 0
 
     auth = repo / "src" / "auth.py"
     auth.write_text(auth.read_text().replace("user: str", "username: str"))
@@ -82,11 +85,15 @@ def test_check_surfaces_linked_section_on_param_rename(tmp_path):
     assert "AuthService.login" in result.output
     assert "pricing.md" not in result.output
     assert "sessions" not in result.output
+    assert "1 suspect section(s)" in result.output
 
 
 def test_check_comment_only_change_surfaces_nothing(tmp_path):
     repo, base = _committed_fixture(tmp_path)
-    runner.invoke(app, ["index", "--root", str(repo), "--heuristics-only", "--base-commit", base])
+    index_result = runner.invoke(
+        app, ["index", "--root", str(repo), "--heuristics-only", "--base-commit", base]
+    )
+    assert index_result.exit_code == 0
 
     cart = repo / "src" / "cart.ts"
     cart.write_text(
@@ -106,3 +113,11 @@ def test_check_without_index_exits_2(tmp_path):
     repo, base = _committed_fixture(tmp_path)
     result = runner.invoke(app, ["check", "--root", str(repo), "--base", base])
     assert result.exit_code == 2
+
+
+def test_check_bad_base_ref_exits_2_with_message(tmp_path):
+    repo, base = _committed_fixture(tmp_path)
+    runner.invoke(app, ["index", "--root", str(repo), "--heuristics-only", "--base-commit", base])
+    result = runner.invoke(app, ["check", "--root", str(repo), "--base", "no-such-ref"])
+    assert result.exit_code == 2
+    assert "no-such-ref" in result.output or "failed" in result.output
