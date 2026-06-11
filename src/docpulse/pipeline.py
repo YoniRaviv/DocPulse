@@ -2,7 +2,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from docpulse.config import Config
 from docpulse.context.base import ContextProvider
@@ -75,7 +75,7 @@ def run_pipeline(
     client: Any,
     index: Index,
     context: ContextProvider,
-    mode: str = "check",
+    mode: Literal["check", "repair"] = "check",
     three_dot: bool = True,
     warn: Callable[[str], None] = _stderr_warn,
 ) -> RunResult:
@@ -121,5 +121,38 @@ def run_pipeline(
     )
 
 
-def _repair_stale(root, base, head, config, client, suspects, verdicts, intent):  # noqa: ANN001
-    return []
+def _repair_stale(
+    root: Path,
+    base: str,
+    head: str,
+    config: Config,
+    client: Any,
+    suspects: list[Suspect],
+    verdicts: list[Verdict],
+    intent: str,
+) -> list[Repair]:
+    """Repair+validate every stale verdict whose confidence clears flag_threshold."""
+    from docpulse.repair.repairer import RepairBundle, repair
+    from docpulse.repair.validator import validate
+
+    suspects_by_id = {s.section.id: s for s in suspects}
+    repairs: list[Repair] = []
+    for verdict in verdicts:
+        if verdict.status != "stale":
+            continue
+        if verdict.confidence < config.confidence.flag_threshold:
+            continue
+        suspect = suspects_by_id[verdict.section_id]
+        old_code, new_code = _seed_code(root, base, head, suspect)
+        bundle = RepairBundle(
+            section_id=verdict.section_id,
+            doc_content=suspect.section.content,
+            diagnosis=verdict.diagnosis,
+            evidence=verdict.evidence,
+            old_code=old_code,
+            new_code=new_code,
+            intent=intent,
+        )
+        proposed = repair(client, bundle)
+        repairs.append(validate(client, proposed, bundle))
+    return repairs

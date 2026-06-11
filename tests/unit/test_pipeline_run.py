@@ -87,3 +87,53 @@ def test_stale_index_warns_when_head_differs(repo, monkeypatch):
         context=FakeContext(""), mode="check", warn=warnings.append,
     )
     assert any("re-run `docpulse index`" in w for w in warnings)
+
+
+def test_repair_mode_repairs_high_confidence_stale(repo, monkeypatch):
+    root, base = repo
+    config = _config()
+    index = build_index(root, config, embedder=None, base_commit=git(root, "rev-parse", "HEAD"))
+    monkeypatch.setattr(
+        pipeline, "verify",
+        lambda client, r, idx, bundle, n: Verdict(
+            section_id=bundle.section_id, status="stale", confidence=0.9,
+            diagnosis="param renamed", evidence=["auth.py:2"],
+        ),
+    )
+    from docpulse.models import Repair
+
+    def fake_repair(client, bundle):
+        return Repair(section_id=bundle.section_id, new_content="fixed",
+                      confidence=0.9, validation_passed=False, rationale="renamed user->username")
+
+    def fake_validate(client, repair_obj, bundle, min_preservation=0.5):
+        return repair_obj.model_copy(update={"validation_passed": True})
+
+    monkeypatch.setattr("docpulse.repair.repairer.repair", fake_repair)
+    monkeypatch.setattr("docpulse.repair.validator.validate", fake_validate)
+
+    result = pipeline.run_pipeline(
+        root, base, "HEAD", config, client=object(), index=index,
+        context=FakeContext("rename"), mode="repair",
+    )
+    assert len(result.repairs) == 1
+    assert result.repairs[0].validation_passed is True
+    assert result.repairs[0].rationale == "renamed user->username"
+
+
+def test_repair_mode_skips_low_confidence_stale(repo, monkeypatch):
+    root, base = repo
+    config = _config()
+    index = build_index(root, config, embedder=None, base_commit=git(root, "rev-parse", "HEAD"))
+    monkeypatch.setattr(
+        pipeline, "verify",
+        lambda client, r, idx, bundle, n: Verdict(
+            section_id=bundle.section_id, status="stale", confidence=0.2,
+            diagnosis="maybe", evidence=[],
+        ),
+    )
+    result = pipeline.run_pipeline(
+        root, base, "HEAD", config, client=object(), index=index,
+        context=FakeContext(""), mode="repair",
+    )
+    assert result.repairs == []  # below flag_threshold -> not repaired
