@@ -52,3 +52,28 @@ def test_link_source_is_validated():
 
     with pytest.raises(ValueError):
         Link(section_id="s", chunk_id="c", source="vibes", score=0.5)
+
+
+def test_chunk_kind_and_language_are_validated():
+    import pytest
+
+    with pytest.raises(ValueError):
+        make_chunk(kind="paragraph")
+    with pytest.raises(ValueError):
+        make_chunk(language="cobol")
+
+
+def test_suspect_pairs_chunks_with_scores():
+    from docpulse.models import DocSection, Suspect, SuspectChunk
+
+    section = DocSection(
+        id="docs/auth.md#login", path="docs/auth.md", heading_path=["Login"],
+        content="...", content_hash="h", mentions=[], start_line=1, end_line=3,
+    )
+    suspect = Suspect(
+        section=section,
+        changed_chunks=[SuspectChunk(chunk=make_chunk(), link_score=1.0, change_size=3)],
+        score=3.0,
+    )
+    assert suspect.changed_chunks[0].link_score == 1.0
+    assert suspect.changed_chunks[0].chunk.name == "AuthService.login"

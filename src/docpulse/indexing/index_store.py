@@ -12,14 +12,10 @@ from docpulse.models import Index
 
 
 def _code_files(root: Path, config: Config) -> list[str]:
-    include = pathspec.PathSpec.from_lines("gitwildmatch", config.code.include)
-    exclude = pathspec.PathSpec.from_lines("gitwildmatch", config.code.exclude)
     return sorted(
         str(p.relative_to(root))
         for p in root.rglob("*")
-        if p.is_file()
-        and include.match_file(str(p.relative_to(root)))
-        and not exclude.match_file(str(p.relative_to(root)))
+        if p.is_file() and config.code.matches(str(p.relative_to(root)))
     )
 
 
@@ -81,6 +77,8 @@ def update_index(
         if rel.endswith(".md"):
             sections.extend(parse_markdown(rel, file_path.read_text()))
         else:
+            if not config.code.matches(rel):
+                continue  # excluded by code globs: skip
             if rules_for_path(rel) is None:
                 continue  # unsupported file type: don't read
             chunks.extend(chunk_source(rel, file_path.read_text()))

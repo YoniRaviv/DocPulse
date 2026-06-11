@@ -1,7 +1,14 @@
+from functools import lru_cache
 from pathlib import Path
 
+import pathspec
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+@lru_cache(maxsize=None)
+def _compiled_spec(patterns: tuple[str, ...]) -> pathspec.PathSpec:
+    return pathspec.PathSpec.from_lines("gitwildmatch", patterns)
 
 
 class DocGlob(BaseModel):
@@ -11,6 +18,11 @@ class DocGlob(BaseModel):
 class CodeGlobs(BaseModel):
     include: list[str] = ["src/**"]
     exclude: list[str] = []
+
+    def matches(self, path: str) -> bool:
+        return _compiled_spec(tuple(self.include)).match_file(path) and not _compiled_spec(
+            tuple(self.exclude)
+        ).match_file(path)
 
 
 class ConfidenceConfig(BaseModel):
@@ -24,12 +36,12 @@ class LinkingConfig(BaseModel):
 
 
 class BudgetConfig(BaseModel):
-    max_suspects_per_run: int = 20
-    max_tool_calls_per_suspect: int = 10
+    max_suspects_per_run: int = Field(default=20, ge=0)
+    max_tool_calls_per_suspect: int = Field(default=10, ge=0)
 
 
 class Config(BaseModel):
-    model: str
+    model: str | None = None  # required for verify/repair; index/check run without it
     embedding_model: str = "openai/text-embedding-3-small"
     docs: list[DocGlob]
     code: CodeGlobs = CodeGlobs()
