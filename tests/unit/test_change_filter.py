@@ -140,3 +140,12 @@ def test_python_docstring_change_is_meaningful():
         modified(path="src/m.py", base_ranges=[(2, 2)], head_ranges=[(2, 2)]), base, head
     )
     assert {c.chunk.id for c in changed} == {"src/m.py::f"}
+
+
+def test_comment_only_deletion_is_dropped():
+    base = "def login(user):\n    # old comment\n    return user\n"
+    head = "def login(user):\n    return user\n"
+    changed = file_changed_chunks(
+        modified(path="src/auth.py", base_ranges=[(2, 2)], head_ranges=[]), base, head
+    )
+    assert changed == []
