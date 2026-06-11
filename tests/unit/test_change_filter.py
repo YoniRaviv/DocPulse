@@ -109,3 +109,34 @@ def test_meaningful_changed_chunks_drops_excluded_paths(tmp_path):
     )
     paths = {c.chunk.path for c in changed}
     assert paths == {"src/auth.py"}
+
+
+def test_pure_deletion_inside_function_is_meaningful():
+    # audit(user) on line 2 is deleted; login survives — must surface as changed.
+    base = "def login(user):\n    audit(user)\n    return user\n"
+    head = "def login(user):\n    return user\n"
+    changed = file_changed_chunks(
+        modified(path="src/auth.py", base_ranges=[(2, 2)], head_ranges=[]), base, head
+    )
+    ids = {c.chunk.id for c in changed}
+    assert "src/auth.py::login" in ids
+
+
+def test_typescript_comment_only_change_is_dropped():
+    # A comment insertion should not flag the function as meaningfully changed.
+    base = "export function formatPrice(cents: number): string {\n  return String(cents);\n}\n"
+    head = base.replace("  return", "  // cents are pre-tax\n  return")
+    changed = file_changed_chunks(
+        modified(path="src/cart.ts", base_ranges=[], head_ranges=[(2, 2)]), base, head
+    )
+    assert changed == []
+
+
+def test_python_docstring_change_is_meaningful():
+    # Docstrings are string expressions, not comments — deliberate doc-staleness signal.
+    base = 'def f():\n    """Old description."""\n    return 1\n'
+    head = 'def f():\n    """New description."""\n    return 1\n'
+    changed = file_changed_chunks(
+        modified(path="src/m.py", base_ranges=[(2, 2)], head_ranges=[(2, 2)]), base, head
+    )
+    assert {c.chunk.id for c in changed} == {"src/m.py::f"}

@@ -9,6 +9,7 @@ from docpulse.indexing.chunk_rules import rules_for_path
 from docpulse.indexing.code_chunker import chunk_source
 from docpulse.models import CodeChunk
 
+# All shipped grammars (py/ts/csharp) use "comment"; extras future-proof other grammars.
 _COMMENT_KINDS = {"comment", "line_comment", "block_comment"}
 
 
@@ -69,8 +70,14 @@ def file_changed_chunks(
         return _tokens(head.path, base.content) != _tokens(head.path, head.content)
 
     for head_chunk in head_chunks:
+        base_chunk = base_by_id.get(head_chunk.id)
         size = _overlap(head_chunk, diff.head_ranges)
-        if size and is_meaningful(base_by_id.get(head_chunk.id), head_chunk):
+        if not size and base_chunk is not None:
+            # Pure deletion inside a surviving symbol: the hunk has no head_ranges
+            # overlap, but the base version's lines were changed — fall back to the
+            # base-side overlap so the deletion is not silently dropped.
+            size = _overlap(base_chunk, diff.base_ranges)
+        if size and is_meaningful(base_chunk, head_chunk):
             changed[head_chunk.id] = ChangedChunk(chunk=head_chunk, change_size=size)
 
     # Base-side pass catches symbols deleted (or emptied) in head.
