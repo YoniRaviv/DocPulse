@@ -4,7 +4,7 @@ from pathlib import Path
 from docpulse.command_runner import CommandRunner, default_runner
 from docpulse.config import Config
 from docpulse.models import DocSection, Repair, RunResult
-from docpulse.repair.routing import route
+from docpulse.repair.routing import Tier, route
 from docpulse.report.summary import render_summary
 
 
@@ -99,10 +99,10 @@ class RepoMarkdownDestination:
     def summarize(self, result: RunResult) -> None:
         print(render_summary(result))
 
-    def _routed_for_pr(self, result: RunResult) -> list[tuple[Repair, str]]:
+    def _routed_for_pr(self, result: RunResult) -> list[tuple[Repair, Tier]]:
         """(repair, tier) pairs whose tier means 'include in the companion PR'."""
         verdicts = {v.section_id: v for v in result.verdicts}
-        out: list[tuple[Repair, str]] = []
+        out: list[tuple[Repair, Tier]] = []
         for repair_obj in result.repairs:
             verdict = verdicts.get(repair_obj.section_id)
             if verdict is None:
@@ -142,6 +142,7 @@ class RepoMarkdownDestination:
             *[["git", "add", path] for path in sorted(file_writes)],
             ["git", "commit", "-m", commit_message],
             ["git", "push", "-u", "origin", branch],
+            # TODO(Phase 6): add --base <base_branch> once the live path lands.
             ["gh", "pr", "create", "--title", pr_title, "--body", pr_body],
         ]
         return FixPlan(branch, commit_message, pr_title, pr_body, file_writes, commands)
@@ -157,6 +158,9 @@ class RepoMarkdownDestination:
             return ""
         if self.dry_run:
             return plan.branch
+        # Phase 6 live path. NOTE: writes+commands are not atomic — a failure
+        # mid-way leaves the working tree partially modified. Phase 6 should
+        # stage to a temp area or add cleanup before shipping this.
         for path, new_text in plan.file_writes.items():
             (self.root / path).write_text(new_text)
         for command in plan.commands:

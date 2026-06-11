@@ -162,3 +162,34 @@ def test_publish_fix_dry_run_returns_branch_without_running_commands(tmp_path):
     assert branch == "docpulse/fix-abcdef12"
     assert ran == []  # dry-run: no git/gh commands executed
     assert doc.read_text() == "# Login\n\nCall login with a user.\n"  # file untouched in dry-run
+
+
+def test_build_fix_plan_groups_two_repairs_in_one_file(tmp_path):
+    (tmp_path / "docs").mkdir()
+    doc = tmp_path / "docs" / "api.md"
+    doc.write_text("# A\nold a\n\n# B\nold b\n")
+    secs = parse_markdown("docs/api.md", doc.read_text())
+    a, b = secs[0], secs[1]
+    dest = RepoMarkdownDestination(
+        root=tmp_path, sections_by_id={a.id: a, b.id: b},
+        config=Config(docs=[DocGlob(path="**/*.md")]), head_sha="abcdef1234567890",
+    )
+    result = RunResult(
+        verdicts=[
+            Verdict(section_id=a.id, status="stale", confidence=0.95, diagnosis="d", evidence=[]),
+            Verdict(section_id=b.id, status="stale", confidence=0.95, diagnosis="d", evidence=[]),
+        ],
+        repairs=[
+            Repair(section_id=a.id, new_content="# A\nNEW A", confidence=0.95,
+                   validation_passed=True, rationale="fix a"),
+            Repair(section_id=b.id, new_content="# B\nNEW B", confidence=0.95,
+                   validation_passed=True, rationale="fix b"),
+        ],
+        suspects_checked=2, suspects_total=2, tokens_used=0, exit_code=1,
+    )
+    plan = dest.build_fix_plan(result)
+    assert plan is not None
+    assert list(plan.file_writes) == ["docs/api.md"]  # one file, both edits merged
+    written = plan.file_writes["docs/api.md"]
+    assert "NEW A" in written and "NEW B" in written
+    assert "old a" not in written and "old b" not in written
