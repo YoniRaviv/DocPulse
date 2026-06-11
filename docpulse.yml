@@ -1,0 +1,15 @@
+model: anthropic/claude-haiku-4-5
+embedding_model: openai/text-embedding-3-small
+docs:
+  - path: "README.md"
+  - path: "docs/**/*.md"
+code:
+  include: ["src/**"]
+  exclude: ["**/*.test.*", "**/*.spec.*", "tests/**"]
+confidence:
+  auto_fix_threshold: 0.85
+  flag_threshold: 0.5
+budget:
+  max_suspects_per_run: 20
+  max_tool_calls_per_suspect: 10
+context: [git]
