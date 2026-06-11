@@ -50,7 +50,7 @@ def _bundle():
 def test_system_prompt_demands_preservation_and_citation():
     lowered = REPAIRER_SYSTEM_PROMPT.lower()
     assert "preserve" in lowered
-    assert "only" in lowered  # touch only the inaccurate parts
+    assert "touch only" in lowered  # touch only the inaccurate parts
     assert "cite" in lowered or "rationale" in lowered
 
 

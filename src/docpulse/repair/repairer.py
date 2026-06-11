@@ -19,6 +19,8 @@ class RepairBundle:
     intent: str
 
 
+_MAX_ATTEMPTS = 2
+
 SUBMIT_REPAIR_SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -65,13 +67,17 @@ def repair(client: Any, bundle: RepairBundle) -> Repair:
     Any failure returns a safe Repair that proposes NO change (validation_passed
     False, confidence 0) so confidence routing will skip it.
     """
+    # Imported lazily so prompts.py (which imports RepairBundle from this module)
+    # has no circular dependency at module load.
     from docpulse.repair.prompts import REPAIRER_SYSTEM_PROMPT, build_repair_user_message
 
     messages: list[Any] = [
         {"role": "system", "content": REPAIRER_SYSTEM_PROMPT},
         build_repair_user_message(bundle),
     ]
-    for _ in range(2):  # initial attempt + one retry
+    # NOTE: the prose-nudge path and the malformed-JSON retry both consume from
+    # this attempt budget; the fail-safe fallback keeps any exhaustion safe.
+    for _ in range(_MAX_ATTEMPTS):
         try:
             message = client.complete(messages, tools=[SUBMIT_REPAIR_SCHEMA])
         except LLMError as exc:
