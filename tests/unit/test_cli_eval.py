@@ -124,4 +124,5 @@ def test_eval_repair_flag_runs_repair_eval():
     assert result.exit_code == 0, result.output
     assert "repair" in result.output.lower()
     assert "preservation" in result.output.lower()
+    assert "surgical" in result.output.lower()
     assert "rename_stale" in result.output  # the one stale case in eval_mini

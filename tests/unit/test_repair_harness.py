@@ -157,3 +157,7 @@ def test_evaluate_repairs_over_one_stale_case(monkeypatch):
     assert row.preservation == 0.5
     assert report.pct_preserved_95 == 0.0
     assert report.mean_accuracy == 5.0
+    # Character-level surgical metric: only "retries" -> "attempts" changed in para 2;
+    # most characters survive, so surgical should be high.
+    assert row.surgical > 0.8
+    assert report.mean_surgical > 0.8

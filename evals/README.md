@@ -33,6 +33,9 @@ repairer + validator over every **stale** case and reports repair quality:
 - **preservation** — fraction of the original section's paragraph blocks that
   survive byte-identical in the repaired section (deterministic; the exit-gate
   metric is "% of stale cases with preservation ≥ 0.95").
+- **surgical** — character-level fraction of the original text retained in the
+  repair (difflib); credits in-paragraph edits that `preservation` (whole-block)
+  misses. The more meaningful surgical-ness gate for small sections.
 - **tier** — `auto_fix` / `draft` / `skip` from confidence routing.
 - **rubric** — an LLM judge scores the repair against `reference_correction`
   on accuracy / completeness / style-fidelity (1–5) and flags cases needing a

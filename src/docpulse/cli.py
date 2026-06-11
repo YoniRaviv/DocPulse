@@ -148,17 +148,19 @@ def eval_cmd(
         repair_client = LLMClient(repair_model)
         repair_report = evaluate_repairs(repair_client, cases, config)
         typer.echo("\n--- repair eval (stale cases) ---")
-        typer.echo(f"{'case':<28} {'preserve':<9} {'tier':<9} acc/cmp/sty  flag")
+        typer.echo(f"{'case':<28} {'preserve':<9} {'surgical':<9} {'tier':<9} acc/cmp/sty  flag")
         for row in repair_report.rows:
             r = row.rubric
             flag = "FLAG" if r.needs_human_review else ""
             typer.echo(
-                f"{row.name:<28} {row.preservation:<9.2f} {row.tier:<9} "
+                f"{row.name:<28} {row.preservation:<9.2f} {row.surgical:<9.2f} {row.tier:<9} "
                 f"{r.accuracy}/{r.completeness}/{r.style_fidelity}        {flag}"
             )
         typer.echo(
             f"\nmean preservation={repair_report.mean_preservation:.2f}  "
             f">=95% preserved={repair_report.pct_preserved_95:.0%}  "
+            f"mean surgical={repair_report.mean_surgical:.2f}  "
+            f">=95% surgical={repair_report.pct_surgical_95:.0%}  "
             f"rubric acc={repair_report.mean_accuracy:.1f} "
             f"cmp={repair_report.mean_completeness:.1f} "
             f"sty={repair_report.mean_style_fidelity:.1f}  "

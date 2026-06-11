@@ -12,7 +12,7 @@ from docpulse.llm import LLMError
 from docpulse.models import Repair, Verdict
 from docpulse.repair.repairer import RepairBundle, repair
 from docpulse.repair.routing import Tier, route
-from docpulse.repair.validator import preservation_ratio, validate
+from docpulse.repair.validator import preservation_ratio, surgical_ratio, validate
 
 PRESERVE_GATE = 0.95  # exit-criterion threshold for "untouched paragraphs preserved"
 
@@ -63,6 +63,7 @@ class RubricScore:
 class RepairCaseResult:
     name: str
     preservation: float
+    surgical: float
     tier: Tier
     rubric: RubricScore
     diff: str
@@ -74,6 +75,8 @@ class RepairEvalReport:
     total: int
     mean_preservation: float
     pct_preserved_95: float       # fraction of cases with preservation >= 0.95
+    mean_surgical: float
+    pct_surgical_95: float        # fraction of cases with surgical >= 0.95
     mean_accuracy: float
     mean_completeness: float
     mean_style_fidelity: float
@@ -165,10 +168,12 @@ def _run_case(client: Any, case: EvalCase, config: Config) -> RepairCaseResult:
     validated = validate(client, proposed, bundle)
     tier = route(verdict, validated, config)
     preservation = preservation_ratio(case.doc_content, validated.new_content)
+    surgical = surgical_ratio(case.doc_content, validated.new_content)
     rubric = judge_repair(client, validated.new_content, _reference_correction(case))
     diff = unified_section_diff(case.name, case.doc_content, validated.new_content)
     return RepairCaseResult(
-        name=case.name, preservation=preservation, tier=tier, rubric=rubric, diff=diff
+        name=case.name, preservation=preservation, surgical=surgical,
+        tier=tier, rubric=rubric, diff=diff
     )
 
 
@@ -185,6 +190,8 @@ def evaluate_repairs(client: Any, cases_dir: Path, config: Config) -> RepairEval
         total=len(rows),
         mean_preservation=_mean([r.preservation for r in rows]),
         pct_preserved_95=_mean([1.0 if r.preservation >= PRESERVE_GATE else 0.0 for r in rows]),
+        mean_surgical=_mean([r.surgical for r in rows]),
+        pct_surgical_95=_mean([1.0 if r.surgical >= PRESERVE_GATE else 0.0 for r in rows]),
         mean_accuracy=_mean([r.rubric.accuracy for r in rows]),
         mean_completeness=_mean([r.rubric.completeness for r in rows]),
         mean_style_fidelity=_mean([r.rubric.style_fidelity for r in rows]),

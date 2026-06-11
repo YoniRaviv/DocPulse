@@ -6,6 +6,35 @@ from docpulse.repair.repairer import RepairBundle
 from docpulse.repair.validator import preservation_ratio, validate
 
 
+def test_surgical_ratio_identical_is_one():
+    from docpulse.repair.validator import surgical_ratio
+    assert surgical_ratio("hello world", "hello world") == 1.0
+
+
+def test_surgical_ratio_empty_original_is_one():
+    from docpulse.repair.validator import surgical_ratio
+    assert surgical_ratio("", "anything") == 1.0
+
+
+def test_surgical_ratio_one_token_change_keeps_most():
+    from docpulse.repair.validator import surgical_ratio
+    original = "Use `fetch(url, retries)` here."
+    new = "Use `fetch(url, attempts)` here."
+    # only retries->attempts changed; most characters survive
+    assert surgical_ratio(original, new) > 0.7
+
+
+def test_surgical_ratio_wholesale_rewrite_is_low():
+    from docpulse.repair.validator import surgical_ratio
+    assert surgical_ratio("aaaa bbbb cccc dddd", "zzzz yyyy xxxx wwww") < 0.4
+
+
+def test_surgical_ratio_additions_do_not_penalize():
+    from docpulse.repair.validator import surgical_ratio
+    # appending new material keeps all original chars -> 1.0
+    assert surgical_ratio("keep this", "keep this plus more") == 1.0
+
+
 def test_identical_text_is_fully_preserved():
     text = "Para one.\n\nPara two.\n\nPara three."
     assert preservation_ratio(text, text) == 1.0

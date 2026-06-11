@@ -1,3 +1,4 @@
+import difflib
 import json
 import re
 from collections import Counter
@@ -32,6 +33,21 @@ def preservation_ratio(original: str, new: str) -> float:
             available[block] -= 1
             kept += 1
     return kept / len(original_blocks)
+
+
+def surgical_ratio(original: str, new: str) -> float:
+    """Fraction of the original text retained, in order, in `new` (character level).
+
+    Unlike preservation_ratio (whole paragraph blocks), this credits surgical
+    in-paragraph edits: changing one token in a sentence keeps the rest of that
+    sentence's characters. Pure additions to `new` do not lower the score.
+    Returns 1.0 for empty original.
+    """
+    if not original:
+        return 1.0
+    matcher = difflib.SequenceMatcher(None, original, new, autojunk=False)
+    matched = sum(block.size for block in matcher.get_matching_blocks())
+    return matched / len(original)
 
 
 SUBMIT_VALIDATION_SCHEMA: dict[str, Any] = {
