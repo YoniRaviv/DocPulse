@@ -1,0 +1,39 @@
+[project]
+name = "docpulse"
+version = "0.1.0"
+description = "Docs that stay in sync with the heartbeat of the codebase"
+readme = "README.md"
+authors = [
+    { name = "YoniRaviv" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "litellm>=1.88.1",
+    "numpy>=2.4.6",
+    "pathspec>=1.1.1",
+    "pydantic>=2.13.4",
+    "pyyaml>=6.0.3",
+    "tree-sitter>=0.25.2",
+    "tree-sitter-language-pack>=1.8.1",
+    "typer>=0.26.7",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.8,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "ruff>=0.15.16",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[project.scripts]
+docpulse = "docpulse.cli:app"
