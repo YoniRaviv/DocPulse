@@ -27,7 +27,7 @@ def test_read_file_returns_numbered_slice(tmp_path):
 
 def test_read_file_rejects_escape_outside_root(tmp_path):
     _write(tmp_path, "a.py", "x")
-    with pytest.raises(ToolError):
+    with pytest.raises(ToolError, match="escapes workspace root"):
         read_file(tmp_path, "../secrets.txt", 1, 1)
 
 
@@ -71,3 +71,25 @@ def test_dispatch_routes_by_name(tmp_path):
 def test_schemas_cover_three_tools():
     names = {s["function"]["name"] for s in READ_TOOL_SCHEMAS}
     assert names == {"read_file", "grep", "list_symbols"}
+
+
+def test_grep_rejects_escaping_glob(tmp_path):
+    _write(tmp_path, "a.py", "secret\n")
+    with pytest.raises(ToolError):
+        grep(tmp_path, "secret", "../*")
+
+
+def test_dispatch_never_raises_on_bad_args(tmp_path):
+    index = Index(version=1, base_commit="x", chunks=[], sections=[], links=[])
+    dispatch = make_dispatch(tmp_path, index)
+    assert dispatch("read_file", None).startswith("error:")        # non-dict args
+    assert dispatch("grep", []).startswith("error:")               # list args
+    assert dispatch("read_file",
+                    {"path": "a.py", "start": "x", "end": "y"}).startswith("error:")  # bad int
+
+
+def test_grep_truncates_at_max_hits(tmp_path):
+    _write(tmp_path, "big.py", "\n".join(f"match {i}" for i in range(60)) + "\n")
+    out = grep(tmp_path, r"match", "**/*.py")
+    assert "truncated at 50 matches" in out
+    assert out.count("big.py:") == 50  # exactly 50 hit lines before truncation marker
