@@ -71,3 +71,58 @@ def test_show_file(repo):
 def test_bad_ref_raises(repo):
     with pytest.raises(RuntimeError):
         diff_range(repo, "no-such-ref", "HEAD")
+
+
+def test_path_with_spaces(repo):
+    """Paths with spaces must not retain the trailing tab git appends."""
+    spaced = repo / "with space.py"
+    spaced.write_text("hello\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "add spaced file")
+
+    # Modify it so it shows up in the diff
+    spaced.write_text("hello\nworld\n")
+    git(repo, "commit", "-am", "modify spaced file")
+
+    diffs = diff_range(repo, "HEAD~1", "HEAD")
+    assert len(diffs) == 1
+    assert diffs[0].path == "with space.py"
+
+    base = git(repo, "rev-parse", "HEAD~1")
+    content = show_file(repo, base, "with space.py")
+    assert content is not None
+    assert "hello" in content
+
+
+def test_sql_comment_lines_no_phantom_diffs(repo):
+    """Content lines starting with '++' or '--' must not create phantom FileDiff entries."""
+    sql_file = repo / "query.sql"
+    sql_file.write_text("SELECT 1;\n-- a comment\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "add sql file")
+
+    # Delete the SQL comment line and add a '++ weird' content line
+    sql_file.write_text("SELECT 1;\n++ weird added line\n")
+    git(repo, "commit", "-am", "replace comment with weird line")
+
+    diffs = diff_range(repo, "HEAD~1", "HEAD")
+    assert len(diffs) == 1
+    assert diffs[0].path == "query.sql"
+    assert diffs[0].status == "modified"
+
+
+def test_multi_hunk_change_accumulates_ranges(repo):
+    """Two separate hunks in one commit must accumulate on the same FileDiff."""
+    # a.py already has 6 lines; modify line 2 and line 6
+    (repo / "a.py").write_text(
+        "def f():\n    return 99\n\n\ndef g():\n    return 99\n"
+    )
+    git(repo, "commit", "-am", "change lines 2 and 6")
+
+    diffs = diff_range(repo, "HEAD~1", "HEAD")
+    assert len(diffs) == 1
+    diff = diffs[0]
+    assert diff.path == "a.py"
+    assert len(diff.head_ranges) == 2
+    assert diff.head_ranges[0] == (2, 2)
+    assert diff.head_ranges[1] == (6, 6)
