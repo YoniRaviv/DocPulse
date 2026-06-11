@@ -2,14 +2,17 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+Language = Literal["python", "typescript", "csharp"]
+ChunkKind = Literal["function", "class", "method", "interface", "enum"]
+
 
 class CodeChunk(BaseModel):
     """Represents a code element extracted from source code."""
 
     id: str  # "src/auth.py::AuthService.login"
     path: str
-    language: str  # "python" | "typescript" | "csharp"
-    kind: str  # "function" | "class" | "method" | "interface" | "enum"
+    language: Language
+    kind: ChunkKind
     name: str  # qualified: "AuthService.login"
     signature: str  # first line, e.g. "def login(self, user: str) -> Token:"
     content: str  # full node text
@@ -50,12 +53,20 @@ class Index(BaseModel):
     links: list[Link]
 
 
+class SuspectChunk(BaseModel):
+    """A changed code chunk linked to a suspect section."""
+
+    chunk: CodeChunk  # head version (base version for deleted symbols)
+    link_score: float  # strongest link tying this chunk to the section
+    change_size: int  # changed lines overlapping the chunk
+
+
 class Suspect(BaseModel):
     """Phase 2: Documentation section that might be stale due to code changes."""
 
     section: DocSection
-    changed_chunks: list[CodeChunk]
-    link_scores: list[float]
+    changed_chunks: list[SuspectChunk]
+    score: float  # ranking value: sum(link_score * change_size)
 
 
 class Verdict(BaseModel):

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pathspec
 import yaml
 from pydantic import BaseModel
 
@@ -11,6 +12,11 @@ class DocGlob(BaseModel):
 class CodeGlobs(BaseModel):
     include: list[str] = ["src/**"]
     exclude: list[str] = []
+
+    def matches(self, path: str) -> bool:
+        include = pathspec.PathSpec.from_lines("gitwildmatch", self.include)
+        exclude = pathspec.PathSpec.from_lines("gitwildmatch", self.exclude)
+        return include.match_file(path) and not exclude.match_file(path)
 
 
 class ConfidenceConfig(BaseModel):
@@ -29,7 +35,7 @@ class BudgetConfig(BaseModel):
 
 
 class Config(BaseModel):
-    model: str
+    model: str | None = None  # required for verify/repair; index/check run without it
     embedding_model: str = "openai/text-embedding-3-small"
     docs: list[DocGlob]
     code: CodeGlobs = CodeGlobs()
