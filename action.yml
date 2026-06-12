@@ -5,7 +5,7 @@ branding:
   color: "purple"
 inputs:
   mode:
-    description: "check (comment on drift) or repair (also open a companion fix PR)"
+    description: "check (comment on drift) or repair (commit doc fixes onto the PR branch)"
     required: false
     default: "check"
   config-path:

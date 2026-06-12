@@ -28,6 +28,8 @@ if [ "$LAST_AUTHOR_EMAIL" = "$BOT_EMAIL" ]; then
 fi
 
 INDEX_FLAGS=""
+# Compared against the literal "true" (the value action.yml passes). Raw
+# docker/Jenkins callers must use "true", not "1"/"yes".
 if [ "${DOCPULSE_HEURISTICS_ONLY:-false}" = "true" ]; then
   INDEX_FLAGS="--heuristics-only"
 fi

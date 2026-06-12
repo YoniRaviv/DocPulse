@@ -38,7 +38,7 @@ jobs:
 
 Embeddings improve link recall and need an embedding key (`OPENAI_API_KEY`). To run without one, set the action input `heuristics-only: true` — linking then uses name mentions only.
 
-In `repair` mode DocPulse commits the doc fix straight onto your PR's branch, so the fix lands in the same PR (same-repo PRs only — DocPulse can't push to a fork, so use `mode: check` for fork-based contributions).
+In `repair` mode DocPulse commits the doc fix straight onto your PR's branch, so the fix lands in the same PR (same-repo PRs only — DocPulse can't push to a fork, so use `mode: check` for fork-based contributions). It skips itself when the most-recent commit on the branch is already a doc-sync commit, so the auto-fix push never re-triggers an endless loop.
 
 Add a `docpulse.yml` at your repo root (see [Configuration](#configuration)).
 
@@ -55,7 +55,9 @@ docpulse repair --base origin/main --push             # commit+push doc fixes on
 ```
 
 `check` exits 0 (clean), 1 (a doc section is stale at/above `flag_threshold`),
-or 2 (setup/tool error). `unverified` never fails the build.
+or 2 (setup/tool error). `unverified` never fails the build. `repair` uses the same
+codes — it exits 1 if drift was found, even after committing a fix, so the auto-fixed
+PR still flags for human review.
 
 ## Eval numbers
 
@@ -119,6 +121,12 @@ docker run --rm \
   -e ANTHROPIC_API_KEY -e GH_TOKEN \
   -e DOCPULSE_MODE=check \
   -e DOCPULSE_BASE_REF=origin/main \
+  -e DOCPULSE_PR_NUMBER="$PR_NUMBER" \
+  -e DOCPULSE_HEURISTICS_ONLY=true \
   -v "$PWD:/work" -w /work \
   ghcr.io/yoniraviv/docpulse:latest
 ```
+
+Set `DOCPULSE_PR_NUMBER` to your CI's PR/MR number so the flag comment is posted to
+the PR (without it, the comment is only printed to the log). Drop
+`DOCPULSE_HEURISTICS_ONLY` and add `-e OPENAI_API_KEY` to use embedding-based linking.
