@@ -1,4 +1,5 @@
 import difflib
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -37,6 +38,20 @@ def _head_commit(root: Path) -> str:
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return "unknown"
     return result.stdout.strip() if result.returncode == 0 else "unknown"
+
+
+def _base_branch(base: str) -> str:
+    """Branch name for `gh pr create --base` (strip a leading `origin/`)."""
+    return base[len("origin/"):] if base.startswith("origin/") else base
+
+
+def _pr_number(env: dict[str, str]) -> str | None:
+    """PR number for `gh pr comment`, from explicit env or GITHUB_REF."""
+    explicit = env.get("DOCPULSE_PR_NUMBER") or env.get("PR_NUMBER")
+    if explicit:
+        return explicit
+    match = re.match(r"refs/pull/(\d+)/", env.get("GITHUB_REF", ""))
+    return match.group(1) if match else None
 
 
 @app.command("index")
