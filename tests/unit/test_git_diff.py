@@ -126,3 +126,41 @@ def test_multi_hunk_change_accumulates_ranges(repo):
     assert len(diff.head_ranges) == 2
     assert diff.head_ranges[0] == (2, 2)
     assert diff.head_ranges[1] == (6, 6)
+
+
+def test_three_dot_excludes_upstream_commits(repo):
+    default = git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    git(repo, "checkout", "-b", "feature")
+    (repo / "a.py").write_text("def f():\n    return 99\n\n\ndef g():\n    return 2\n")
+    git(repo, "commit", "-am", "feature: change f")
+    git(repo, "checkout", default)
+    (repo / "b.py").write_text("X = 999\n")
+    git(repo, "commit", "-am", "main: change b")
+    main = git(repo, "rev-parse", "HEAD")
+    three = {d.path for d in diff_range(repo, main, "feature", three_dot=True)}
+    assert three == {"a.py"}  # only the PR's own commit
+    two = {d.path for d in diff_range(repo, main, "feature", three_dot=False)}
+    assert two == {"a.py", "b.py"}  # tree diff blames the upstream b.py change too
+
+
+def test_default_is_three_dot(repo):
+    default = git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    git(repo, "checkout", "-b", "feature")
+    (repo / "a.py").write_text("def f():\n    return 99\n\n\ndef g():\n    return 2\n")
+    git(repo, "commit", "-am", "feature: change f")
+    git(repo, "checkout", default)
+    (repo / "b.py").write_text("X = 999\n")
+    git(repo, "commit", "-am", "main: change b")
+    main = git(repo, "rev-parse", "HEAD")
+    assert {d.path for d in diff_range(repo, main, "feature")} == {"a.py"}
+
+
+def test_no_merge_base_falls_back_without_crashing(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "--orphan", "orphan")
+    git(repo, "rm", "-rf", ".")
+    (repo / "z.py").write_text("Z = 1\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "orphan root")
+    diffs = diff_range(repo, base, "orphan", three_dot=True)  # must not raise
+    assert isinstance(diffs, list)
