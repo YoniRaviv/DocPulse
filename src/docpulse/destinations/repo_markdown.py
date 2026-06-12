@@ -86,12 +86,37 @@ class RepoMarkdownDestination:
         ]
         if not flagged:
             return ""
-        lines = ["## \U0001fa7a DocPulse — flagged documentation", ""]
+        n = len(flagged)
+        count_phrase = f"**{n} section{'s' if n != 1 else ''}**"
+        lines = [
+            "## \U0001fa7a DocPulse — flagged documentation",
+            "",
+            f"{count_phrase} may be out of sync with this PR's code changes.",
+        ]
         for v in flagged:
             section = self.sections_by_id.get(v.section_id)
-            loc = section.path if section else v.section_id
-            evidence = f" _(evidence: {', '.join(v.evidence)})_" if v.evidence else ""
-            lines.append(f"- **{v.section_id}** ({loc}) — {v.diagnosis}{evidence}")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+            if section:
+                lines.append(f"### {section.path}")
+                if section.heading_path:
+                    trail = " › ".join(section.heading_path)
+                    lines.append(f"**{trail}**")
+            else:
+                lines.append(f"### {v.section_id}")
+            lines.append("")
+            lines.append(v.diagnosis.strip())
+            if v.evidence:
+                k = len(v.evidence)
+                items = "\n".join(
+                    f"- {item.replace(chr(10), ' ').strip()}" for item in v.evidence
+                )
+                lines.append("")
+                lines.append(f"<details><summary>Evidence ({k})</summary>")
+                lines.append("")
+                lines.append(items)
+                lines.append("</details>")
         return "\n".join(lines)
 
     def publish_findings(self, result: RunResult) -> None:

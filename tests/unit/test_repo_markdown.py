@@ -200,6 +200,38 @@ def test_build_fix_plan_groups_two_repairs_in_one_file(tmp_path):
     assert "old a" not in written and "old b" not in written
 
 
+def test_flag_comment_uses_heading_trail_and_collapsed_evidence():
+    section = DocSection(
+        id="docs/concepts/models.md#basic-model-usage/model-methods",
+        path="docs/concepts/models.md",
+        heading_path=["Basic model usage", "Model methods and properties"],
+        content="c", content_hash="h", mentions=[], start_line=1, end_line=2,
+    )
+    result = RunResult(
+        verdicts=[Verdict(section_id=section.id, status="stale", confidence=0.8,
+                          diagnosis="model_copy default changed",
+                          evidence=["pydantic/main.py:393", "docs/concepts/models.md:160"])],
+        repairs=[], suspects_checked=1, suspects_total=1, tokens_used=0, exit_code=1,
+    )
+    comment = _dest([section]).flag_comment(result)
+    assert "### docs/concepts/models.md" in comment
+    assert "Basic model usage › Model methods and properties" in comment
+    assert "model_copy default changed" in comment
+    assert "<details><summary>Evidence (2)</summary>" in comment
+    assert "- pydantic/main.py:393" in comment
+    assert "(docs/concepts/models.md)" not in comment  # no redundant path duplication
+
+
+def test_flag_comment_singular_count():
+    section = _section()
+    result = RunResult(
+        verdicts=[Verdict(section_id=section.id, status="stale", confidence=0.9,
+                          diagnosis="d", evidence=[])],
+        repairs=[], suspects_checked=1, suspects_total=1, tokens_used=0, exit_code=1,
+    )
+    assert "**1 section**" in _dest([section]).flag_comment(result)
+
+
 def _stale_result(section):
     return RunResult(
         verdicts=[Verdict(section_id=section.id, status="stale", confidence=0.8,
