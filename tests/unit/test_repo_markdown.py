@@ -118,11 +118,15 @@ def test_build_fix_plan_groups_edits_and_routes(tmp_path):
     )
     plan = dest.build_fix_plan(result)
     assert plan is not None
-    assert plan.branch == "docpulse/fix-abcdef12"
     assert "docs/auth.md" in plan.file_writes
     assert "username" in plan.file_writes["docs/auth.md"]
-    assert "user->username" in plan.pr_body
-    assert ["gh", "pr", "create", "--title", plan.pr_title, "--body", plan.pr_body] in plan.commands
+    # commands: git add, git commit, git push origin HEAD
+    assert ["git", "add", "docs/auth.md"] in plan.commands
+    assert ["git", "commit", "-m", plan.commit_message] in plan.commands
+    assert ["git", "push", "origin", "HEAD"] in plan.commands
+    # no companion-PR commands
+    assert not any(c[:3] == ["gh", "pr", "create"] for c in plan.commands)
+    assert not any(c[:3] == ["git", "checkout", "-b"] for c in plan.commands)
 
 
 def test_build_fix_plan_skips_failed_validation(tmp_path):
@@ -141,7 +145,7 @@ def test_build_fix_plan_skips_failed_validation(tmp_path):
     assert dest.build_fix_plan(result) is None
 
 
-def test_publish_fix_dry_run_returns_branch_without_running_commands(tmp_path):
+def test_publish_fix_dry_run_returns_empty_without_running_commands(tmp_path):
     (tmp_path / "docs").mkdir()
     doc = tmp_path / "docs" / "auth.md"
     doc.write_text("# Login\n\nCall login with a user.\n")
@@ -159,9 +163,9 @@ def test_publish_fix_dry_run_returns_branch_without_running_commands(tmp_path):
                         confidence=0.95, validation_passed=True, rationale="r")],
         suspects_checked=1, suspects_total=1, tokens_used=0, exit_code=1,
     )
-    branch = dest.publish_fix(result)
-    assert branch == "docpulse/fix-abcdef12"
-    assert ran == []  # dry-run: no git/gh commands executed
+    ret = dest.publish_fix(result)
+    assert ret == ""  # dry-run: returns empty string
+    assert ran == []  # dry-run: no git commands executed
     assert doc.read_text() == "# Login\n\nCall login with a user.\n"  # file untouched in dry-run
 
 
@@ -238,40 +242,7 @@ def _fixable_result(section):
     )
 
 
-def test_fix_plan_includes_base_branch_when_set(tmp_path):
-    md = tmp_path / "docs" / "auth.md"
-    md.parent.mkdir(parents=True)
-    md.write_text("# login\nold\n")
-    section = DocSection(id="docs/auth.md#login", path="docs/auth.md",
-                         heading_path=["login"], content="# login\nold",
-                         content_hash="h", mentions=[], start_line=1, end_line=2)
-    dest = RepoMarkdownDestination(
-        root=tmp_path, sections_by_id={section.id: section},
-        config=Config(docs=[DocGlob(path="**/*.md")]), head_sha="abcdef1234567890",
-        base_branch="main",
-    )
-    plan = dest.build_fix_plan(_fixable_result(section))
-    pr_create = [c for c in plan.commands if c[:3] == ["gh", "pr", "create"]][0]
-    assert "--base" in pr_create and pr_create[pr_create.index("--base") + 1] == "main"
-
-
-def test_fix_plan_omits_base_branch_when_unset(tmp_path):
-    md = tmp_path / "docs" / "auth.md"
-    md.parent.mkdir(parents=True)
-    md.write_text("# login\nold\n")
-    section = DocSection(id="docs/auth.md#login", path="docs/auth.md",
-                         heading_path=["login"], content="# login\nold",
-                         content_hash="h", mentions=[], start_line=1, end_line=2)
-    dest = RepoMarkdownDestination(
-        root=tmp_path, sections_by_id={section.id: section},
-        config=Config(docs=[DocGlob(path="**/*.md")]), head_sha="abcdef1234567890",
-    )
-    plan = dest.build_fix_plan(_fixable_result(section))
-    pr_create = [c for c in plan.commands if c[:3] == ["gh", "pr", "create"]][0]
-    assert "--base" not in pr_create
-
-
-def test_publish_fix_live_runs_commands_in_order_and_returns_url(tmp_path):
+def test_publish_fix_live_commits_and_pushes(tmp_path):
     md = tmp_path / "docs" / "auth.md"
     md.parent.mkdir(parents=True)
     md.write_text("# login\nold\n")
@@ -282,18 +253,22 @@ def test_publish_fix_live_runs_commands_in_order_and_returns_url(tmp_path):
 
     def fake_runner(args):
         calls.append(args)
-        return "https://github.com/o/r/pull/7\n" if args[:3] == ["gh", "pr", "create"] else ""
+        return ""
 
     dest = RepoMarkdownDestination(
         root=tmp_path, sections_by_id={section.id: section},
         config=Config(docs=[DocGlob(path="**/*.md")]), head_sha="abcdef1234567890",
-        run_command=fake_runner, dry_run=False, base_branch="main",
+        run_command=fake_runner, dry_run=False,
     )
-    url = dest.publish_fix(_fixable_result(section))
-    assert url == "https://github.com/o/r/pull/7"
+    commit_msg = dest.publish_fix(_fixable_result(section))
+    assert "DocPulse" in commit_msg  # returns the commit message
     assert md.read_text().splitlines()[:2] == ["# login", "fixed"]  # file written
-    assert calls[0][:2] == ["git", "checkout"]          # branch created first
-    assert calls[-1][:3] == ["gh", "pr", "create"]       # PR created last
+    # first command(s) are git add
+    assert calls[0][:2] == ["git", "add"]
+    # last command is git push origin HEAD
+    assert calls[-1] == ["git", "push", "origin", "HEAD"]
+    # no gh pr create anywhere
+    assert not any(c[:3] == ["gh", "pr", "create"] for c in calls)
 
 
 def test_publish_fix_live_propagates_runner_error(tmp_path):

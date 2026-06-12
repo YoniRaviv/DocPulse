@@ -10,14 +10,15 @@ from docpulse.report.summary import render_summary
 
 @dataclass
 class FixPlan:
-    """The dry-run companion-PR plan. Phase 6 turns `commands` into real calls."""
+    """The doc-sync commit plan: file rewrites + the git commands to land them.
 
-    branch: str
+    `--push` commits these doc edits onto the current branch and pushes, so the
+    fix lands in the same PR (no separate companion PR).
+    """
+
     commit_message: str
-    pr_title: str
-    pr_body: str
     file_writes: dict[str, str]   # repo-relative path -> full new file content
-    commands: list[list[str]]     # git/gh argv lists Phase 6 would execute
+    commands: list[list[str]]     # git argv lists the live path executes
 
 
 def _content_lines(content: str) -> list[str]:
@@ -51,11 +52,11 @@ def replace_sections(file_text: str, edits: list[tuple[DocSection, str]]) -> str
 
 
 class RepoMarkdownDestination:
-    """Plans a companion-PR + flag comment for a repo-markdown destination.
+    """Repo-markdown destination: flag comment + a doc-sync commit.
 
-    Phase 5 is dry-run: it constructs the branch/commit/PR-body and the `gh`/`git`
-    commands but does not push or open a PR (deferred to Phase 6). `summarize` and
-    `publish_findings` print to stdout.
+    `publish_findings` posts (live) or prints the flag comment. In `--push`
+    (live) mode `publish_fix` commits the doc fixes onto the current branch and
+    pushes; dry-run only builds the plan. `summarize` prints the health line.
     """
 
     def __init__(
@@ -66,7 +67,6 @@ class RepoMarkdownDestination:
         head_sha: str,
         run_command: CommandRunner | None = None,
         dry_run: bool = True,
-        base_branch: str | None = None,
         pr_number: str | None = None,
     ) -> None:
         self.root = root
@@ -75,7 +75,6 @@ class RepoMarkdownDestination:
         self.head_sha = head_sha
         self.run_command = run_command or default_runner(root)
         self.dry_run = dry_run
-        self.base_branch = base_branch
         self.pr_number = pr_number
 
     def flag_comment(self, result: RunResult) -> str:
@@ -105,7 +104,8 @@ class RepoMarkdownDestination:
             print(comment)
 
     def summarize(self, result: RunResult) -> None:
-        print(render_summary(result))
+        fix_ref = None if self.dry_run else "committed to branch"
+        print(render_summary(result, fix_ref=fix_ref))
 
     def _routed_for_pr(self, result: RunResult) -> list[tuple[Repair, Tier]]:
         """(repair, tier) pairs whose tier means 'include in the companion PR'."""
@@ -121,62 +121,52 @@ class RepoMarkdownDestination:
         return out
 
     def build_fix_plan(self, result: RunResult) -> "FixPlan | None":
-        """Construct the companion-PR plan, or None if nothing is applyable."""
+        """Plan the doc-sync commit, or None if nothing is applyable."""
         applied = self._routed_for_pr(result)
         if not applied:
             return None
         edits_by_path: dict[str, list[tuple[DocSection, str]]] = {}
-        body_lines: list[str] = []
-        for repair_obj, tier in applied:
+        for repair_obj, _tier in applied:
             section = self.sections_by_id.get(repair_obj.section_id)
             if section is None:
                 continue
             edits_by_path.setdefault(section.path, []).append(
                 (section, repair_obj.new_content)
             )
-            body_lines.append(f"- **{section.id}** ({tier}): {repair_obj.rationale}")
         if not edits_by_path:
             return None
         file_writes: dict[str, str] = {}
         for path, edits in edits_by_path.items():
             original = (self.root / path).read_text()
             file_writes[path] = replace_sections(original, edits)
-        branch = f"docpulse/fix-{self.head_sha[:8]}"
-        commit_message = "docs: sync stale sections (DocPulse)"
-        pr_title = "\U0001f4dd DocPulse: sync docs with code changes"
-        pr_body = "DocPulse detected and fixed stale documentation:\n\n" + "\n".join(body_lines)
-        pr_create = ["gh", "pr", "create", "--title", pr_title, "--body", pr_body]
-        if self.base_branch:
-            pr_create += ["--base", self.base_branch]
+        commit_message = "docs: sync stale sections with code changes (DocPulse)"
         commands = [
-            ["git", "checkout", "-b", branch],
             *[["git", "add", path] for path in sorted(file_writes)],
             ["git", "commit", "-m", commit_message],
-            ["git", "push", "-u", "origin", branch],
-            pr_create,
+            ["git", "push", "origin", "HEAD"],
         ]
-        return FixPlan(branch, commit_message, pr_title, pr_body, file_writes, commands)
+        return FixPlan(
+            commit_message=commit_message, file_writes=file_writes, commands=commands
+        )
 
     def publish_fix(self, result: RunResult) -> str:
-        """Open the companion fix PR.
+        """Commit the doc fixes onto the current branch and push.
 
-        Dry-run: returns the planned branch name without running anything.
-        Live: writes the doc edits, runs the git/gh commands (a failing command
-        raises via the checked runner), and returns the created PR URL.
+        Dry-run: returns "" without running anything (callers print the plan).
+        Live: writes the doc edits, then runs git add/commit/push (a failing
+        command raises via the checked runner). Returns the commit message as a
+        short confirmation, or "" when there was nothing to fix.
         """
         plan = self.build_fix_plan(result)
         if plan is None:
             return ""
         if self.dry_run:
-            return plan.branch
-        # Live path. NOTE: writes+commands are not atomic — a failure mid-way
-        # leaves the working tree partially modified; recoverable because all
-        # changes land on the fresh `docpulse/fix-<sha>` branch.
+            return ""
+        # NOTE: writes+commands are not atomic — a failure mid-way leaves the
+        # working tree partially modified. The edits land on the current PR
+        # branch, so a re-run reconciles them.
         for path, new_text in plan.file_writes.items():
             (self.root / path).write_text(new_text)
-        pr_url = ""
         for command in plan.commands:
-            out = self.run_command(command)
-            if command[:3] == ["gh", "pr", "create"]:
-                pr_url = out.strip()
-        return pr_url or plan.branch
+            self.run_command(command)
+        return plan.commit_message

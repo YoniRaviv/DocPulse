@@ -3,16 +3,10 @@ import subprocess
 from typer.testing import CliRunner
 
 import docpulse.cli as cli_mod
-from docpulse.cli import _base_branch, _pr_number, app
+from docpulse.cli import _pr_number, app
 from docpulse.models import RunResult
 
 runner = CliRunner()
-
-
-def test_base_branch_strips_origin_prefix():
-    assert _base_branch("origin/main") == "main"
-    assert _base_branch("origin/feature/x") == "feature/x"
-    assert _base_branch("main") == "main"
 
 
 def test_pr_number_explicit_env():
@@ -77,14 +71,14 @@ def test_check_push_passes_live_kwargs(tmp_path, monkeypatch):
     assert _FakeDest.last["pr_number"] == "55"
 
 
-def test_repair_push_opens_pr_and_passes_base_branch(tmp_path, monkeypatch):
+def test_repair_push_commits_to_branch(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path)
 
     class _FixDest(_FakeDest):
         def build_fix_plan(self, result):
             return object()  # non-None sentinel; push path skips diff printing
         def publish_fix(self, result):
-            return "https://example/pull/9"
+            return "docs: sync stale sections with code changes (DocPulse)"
 
     monkeypatch.setattr(cli_mod, "_build_destination", lambda **kw: _FixDest(**kw))
     monkeypatch.setattr(cli_mod, "LLMClient", lambda model: object())
@@ -97,5 +91,4 @@ def test_repair_push_opens_pr_and_passes_base_branch(tmp_path, monkeypatch):
     result = runner.invoke(app, ["repair", "--base", "origin/main", "--root", str(repo), "--push"])
     assert result.exit_code == 1, result.output     # drift exit preserved
     assert _FakeDest.last["dry_run"] is False
-    assert _FakeDest.last["base_branch"] == "main"
-    assert "https://example/pull/9" in result.output
+    assert "pushed a doc-sync commit" in result.output

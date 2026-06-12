@@ -3,7 +3,7 @@
 > Docs that stay in sync with the heartbeat of the codebase.
 
 DocPulse detects documentation sections invalidated by a pull request's code
-changes and proposes surgical fixes via a companion PR. A deterministic layer
+changes and commits surgical fixes directly onto the PR branch. A deterministic layer
 (tree-sitter chunking → code↔doc link graph → diff-driven suspect selection)
 decides *what to check*; a bounded agentic layer (an LLM verifier with read/grep
 tools, then a style-preserving repairer with a validation pass) decides *stale
@@ -18,13 +18,14 @@ on: pull_request
 jobs:
   docpulse:
     runs-on: ubuntu-latest
-    if: ${{ !startsWith(github.head_ref, 'docpulse/fix-') }}
     permissions:
-      contents: write          # repair mode pushes a companion branch
+      contents: write          # repair mode commits doc fixes onto the PR branch
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
       - uses: YoniRaviv/DocPulse@v1
         with:
           mode: repair          # or "check" to comment-only
@@ -33,6 +34,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOCPULSE_PR_NUMBER: ${{ github.event.pull_request.number }}
 ```
+
+In `repair` mode DocPulse commits the doc fix straight onto your PR's branch (same-repo PRs). For fork PRs it falls back to a flag comment, since it can't push to the fork.
 
 Add a `docpulse.yml` at your repo root (see [Configuration](#configuration)).
 
@@ -45,7 +48,7 @@ docpulse check  --base origin/main                    # verify docs vs the PR di
 docpulse check  --base origin/main --suspects-only    # keyless: list suspect sections only
 docpulse repair --base origin/main                    # print proposed fixes + the dry-run PR plan
 docpulse repair --base origin/main --write            # apply fixes to doc files locally (no push)
-docpulse repair --base origin/main --push             # open the companion fix PR (needs gh + GH_TOKEN)
+docpulse repair --base origin/main --push             # commit+push doc fixes onto the current branch (needs GH_TOKEN)
 ```
 
 `check` exits 0 (clean), 1 (a doc section is stale at/above `flag_threshold`),
@@ -78,7 +81,7 @@ flowchart LR
     D --> E[repairer]
     E --> F[validator]
   end
-  F --> G[destination:<br/>PR comment + companion fix PR]
+  F --> G[destination:<br/>PR comment + doc-sync commit]
 ```
 
 ## Configuration

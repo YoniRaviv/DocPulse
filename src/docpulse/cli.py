@@ -42,11 +42,6 @@ def _head_commit(root: Path) -> str:
     return result.stdout.strip() if result.returncode == 0 else "unknown"
 
 
-def _base_branch(base: str) -> str:
-    """Branch name for `gh pr create --base` (strip a leading `origin/`)."""
-    return base[len("origin/"):] if base.startswith("origin/") else base
-
-
 def _pr_number(env: dict[str, str]) -> str | None:
     """PR number for `gh pr comment`, from explicit env or GITHUB_REF."""
     explicit = env.get("DOCPULSE_PR_NUMBER") or env.get("PR_NUMBER")
@@ -57,13 +52,13 @@ def _pr_number(env: dict[str, str]) -> str | None:
 
 
 def _build_destination(
-    *, root: Path, sections_by_id, config, head_sha, dry_run, base_branch=None, pr_number=None
+    *, root: Path, sections_by_id, config, head_sha, dry_run, pr_number=None
 ):
     run_command = checked_runner(root) if not dry_run else None
     return RepoMarkdownDestination(
         root, sections_by_id, config, head_sha,
         run_command=run_command, dry_run=dry_run,
-        base_branch=base_branch, pr_number=pr_number,
+        pr_number=pr_number,
     )
 
 
@@ -187,10 +182,10 @@ def repair_cmd(
         False, "--two-dot", help="Diff literal base..head instead of merge-base base...head"
     ),
     push: bool = typer.Option(
-        False, "--push", help="Live: branch+commit+push+companion PR (needs gh + GH_TOKEN)"
+        False, "--push", help="Live: commit+push doc fixes onto the current branch (needs GH_TOKEN)"
     ),
 ) -> None:
-    """Verify, repair stale sections, and print the dry-run companion-PR plan."""
+    """Verify, repair stale sections, and print the dry-run fix plan."""
     index_path = root / ".docpulse" / "index.json"
     if not index_path.exists():
         typer.echo("no index found — run `docpulse index` first", err=True)
@@ -220,16 +215,15 @@ def repair_cmd(
     dest = _build_destination(
         root=root, sections_by_id={s.id: s for s in index.sections},
         config=config, head_sha=_head_commit(root),
-        dry_run=not push, base_branch=_base_branch(base),
+        dry_run=not push,
         pr_number=_pr_number(dict(os.environ)),
     )
     try:
         dest.publish_findings(result)
         plan = dest.build_fix_plan(result)
         if plan is not None and push:
-            url = dest.publish_fix(result)
-            if url:
-                typer.echo(f"\nopened companion fix PR: {url}")
+            dest.publish_fix(result)
+            typer.echo("\npushed a doc-sync commit to the current branch")
         elif plan is not None:
             for path, new_text in sorted(plan.file_writes.items()):
                 original = (root / path).read_text()
@@ -243,7 +237,7 @@ def repair_cmd(
                     (root / path).write_text(new_text)
                 typer.echo(
                     f"\nwrote {len(plan.file_writes)} file(s) on the working tree; "
-                    f"re-run with --push to open the companion PR"
+                    f"re-run with --push to commit and push to the current branch"
                 )
             else:
                 typer.echo("\n# --push would run:")
