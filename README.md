@@ -4,6 +4,8 @@
 
 > Docs that stay in sync with the heartbeat of the codebase.
 
+[![GitHub Marketplace](https://img.shields.io/badge/GitHub%20Marketplace-DocPulse-purple?logo=github)](https://github.com/marketplace/actions/docpulse-self-healing-docs)
+
 DocPulse detects documentation sections invalidated by a pull request's code
 changes and commits surgical fixes directly onto the PR branch. A deterministic layer
 (tree-sitter chunking → code↔doc link graph → diff-driven suspect selection)
