@@ -75,3 +75,27 @@ def test_check_push_passes_live_kwargs(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert _FakeDest.last["dry_run"] is False
     assert _FakeDest.last["pr_number"] == "55"
+
+
+def test_repair_push_opens_pr_and_passes_base_branch(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+
+    class _FixDest(_FakeDest):
+        def build_fix_plan(self, result):
+            return object()  # non-None sentinel; push path skips diff printing
+        def publish_fix(self, result):
+            return "https://example/pull/9"
+
+    monkeypatch.setattr(cli_mod, "_build_destination", lambda **kw: _FixDest(**kw))
+    monkeypatch.setattr(cli_mod, "LLMClient", lambda model: object())
+    monkeypatch.setattr(
+        cli_mod, "run_pipeline",
+        lambda *a, **k: RunResult(verdicts=[], repairs=[], suspects_checked=0,
+                                  suspects_total=0, tokens_used=0, exit_code=1),
+    )
+    monkeypatch.setattr(cli_mod, "GitContext", lambda *a, **k: type("C", (), {"get_intent": lambda self: ""})())
+    result = runner.invoke(app, ["repair", "--base", "origin/main", "--root", str(repo), "--push"])
+    assert result.exit_code == 1, result.output     # drift exit preserved
+    assert _FakeDest.last["dry_run"] is False
+    assert _FakeDest.last["base_branch"] == "main"
+    assert "https://example/pull/9" in result.output

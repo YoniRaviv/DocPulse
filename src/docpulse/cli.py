@@ -181,10 +181,13 @@ def repair_cmd(
     config_path: Path | None = typer.Option(None, "--config", help="Path to docpulse.yml"),
     model: str | None = typer.Option(None, "--model", help="LiteLLM model (overrides config)"),
     write: bool = typer.Option(
-        False, "--write", help="Apply fixes to doc files locally (no push; live PR is Phase 6)"
+        False, "--write", help="Apply fixes to doc files locally (no push)"
     ),
     two_dot: bool = typer.Option(
         False, "--two-dot", help="Diff literal base..head instead of merge-base base...head"
+    ),
+    push: bool = typer.Option(
+        False, "--push", help="Live: branch+commit+push+companion PR (needs gh + GH_TOKEN)"
     ),
 ) -> None:
     """Verify, repair stale sections, and print the dry-run companion-PR plan."""
@@ -214,30 +217,45 @@ def repair_cmd(
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from exc
 
-    dest = RepoMarkdownDestination(
-        root, {s.id: s for s in index.sections}, config, _head_commit(root)
+    dest = _build_destination(
+        root=root, sections_by_id={s.id: s for s in index.sections},
+        config=config, head_sha=_head_commit(root),
+        dry_run=not push, base_branch=_base_branch(base),
+        pr_number=_pr_number(dict(os.environ)),
     )
-    dest.publish_findings(result)
-    plan = dest.build_fix_plan(result)
-    if plan is not None:
-        for path, new_text in sorted(plan.file_writes.items()):
-            original = (root / path).read_text()
-            diff = difflib.unified_diff(
-                original.splitlines(), new_text.splitlines(),
-                fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="",
-            )
-            typer.echo("\n".join(diff))
-        if write:
-            for path, new_text in plan.file_writes.items():
-                (root / path).write_text(new_text)
-            typer.echo(
-                f"\nwrote {len(plan.file_writes)} file(s) on the working tree; "
-                f"branch/push/PR creation lands in Phase 6"
-            )
-        else:
-            typer.echo("\n# Phase 6 would run:")
-            for command in plan.commands:
-                typer.echo("  " + " ".join(shlex.quote(part) for part in command))
+    try:
+        dest.publish_findings(result)
+        plan = dest.build_fix_plan(result)
+        if plan is not None and push:
+            url = dest.publish_fix(result)
+            if url:
+                typer.echo(f"\nopened companion fix PR: {url}")
+        elif plan is not None:
+            for path, new_text in sorted(plan.file_writes.items()):
+                original = (root / path).read_text()
+                diff = difflib.unified_diff(
+                    original.splitlines(), new_text.splitlines(),
+                    fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="",
+                )
+                typer.echo("\n".join(diff))
+            if write:
+                for path, new_text in plan.file_writes.items():
+                    (root / path).write_text(new_text)
+                typer.echo(
+                    f"\nwrote {len(plan.file_writes)} file(s) on the working tree; "
+                    f"re-run with --push to open the companion PR"
+                )
+            else:
+                typer.echo("\n# --push would run:")
+                for command in plan.commands:
+                    typer.echo("  " + " ".join(shlex.quote(part) for part in command))
+    except RuntimeError as exc:
+        typer.echo(
+            f"live publish failed: {exc}\n"
+            "hint: ensure gh is installed and GH_TOKEN has contents+pull-requests:write",
+            err=True,
+        )
+        raise typer.Exit(2) from exc
     dest.summarize(result)
     raise typer.Exit(result.exit_code)
 
