@@ -21,7 +21,7 @@ def render_summary(result: RunResult, fix_ref: str | None = None) -> str:
     fixed = sum(r.validation_passed for r in result.repairs)
     not_checked = result.suspects_total - result.suspects_checked
     if fix_ref:
-        fix_note = f" (PR {fix_ref})"
+        fix_note = f" ({fix_ref})"
     elif fixed:
         fix_note = " (dry-run)"
     else:

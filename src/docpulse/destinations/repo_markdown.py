@@ -10,14 +10,15 @@ from docpulse.report.summary import render_summary
 
 @dataclass
 class FixPlan:
-    """The dry-run companion-PR plan. Phase 6 turns `commands` into real calls."""
+    """The doc-sync commit plan: file rewrites + the git commands to land them.
 
-    branch: str
+    `--push` commits these doc edits onto the current branch and pushes, so the
+    fix lands in the same PR via the doc-sync commit.
+    """
+
     commit_message: str
-    pr_title: str
-    pr_body: str
     file_writes: dict[str, str]   # repo-relative path -> full new file content
-    commands: list[list[str]]     # git/gh argv lists Phase 6 would execute
+    commands: list[list[str]]     # git argv lists the live path executes
 
 
 def _content_lines(content: str) -> list[str]:
@@ -51,11 +52,11 @@ def replace_sections(file_text: str, edits: list[tuple[DocSection, str]]) -> str
 
 
 class RepoMarkdownDestination:
-    """Plans a companion-PR + flag comment for a repo-markdown destination.
+    """Repo-markdown destination: flag comment + a doc-sync commit.
 
-    Phase 5 is dry-run: it constructs the branch/commit/PR-body and the `gh`/`git`
-    commands but does not push or open a PR (deferred to Phase 6). `summarize` and
-    `publish_findings` print to stdout.
+    `publish_findings` posts (live) or prints the flag comment. In `--push`
+    (live) mode `publish_fix` commits the doc fixes onto the current branch and
+    pushes; dry-run only builds the plan. `summarize` prints the health line.
     """
 
     def __init__(
@@ -66,6 +67,7 @@ class RepoMarkdownDestination:
         head_sha: str,
         run_command: CommandRunner | None = None,
         dry_run: bool = True,
+        pr_number: str | None = None,
     ) -> None:
         self.root = root
         self.sections_by_id = sections_by_id
@@ -73,6 +75,7 @@ class RepoMarkdownDestination:
         self.head_sha = head_sha
         self.run_command = run_command or default_runner(root)
         self.dry_run = dry_run
+        self.pr_number = pr_number
 
     def flag_comment(self, result: RunResult) -> str:
         """Markdown comment listing stale sections at/above flag_threshold."""
@@ -83,24 +86,54 @@ class RepoMarkdownDestination:
         ]
         if not flagged:
             return ""
-        lines = ["## \U0001fa7a DocPulse — flagged documentation", ""]
+        n = len(flagged)
+        count_phrase = f"**{n} section{'s' if n != 1 else ''}**"
+        lines = [
+            "## \U0001fa7a DocPulse — flagged documentation",
+            "",
+            f"{count_phrase} may be out of sync with this PR's code changes.",
+        ]
         for v in flagged:
             section = self.sections_by_id.get(v.section_id)
-            loc = section.path if section else v.section_id
-            evidence = f" _(evidence: {', '.join(v.evidence)})_" if v.evidence else ""
-            lines.append(f"- **{v.section_id}** ({loc}) — {v.diagnosis}{evidence}")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+            if section:
+                lines.append(f"### {section.path}")
+                if section.heading_path:
+                    trail = " › ".join(section.heading_path)
+                    lines.append(f"**{trail}**")
+            else:
+                lines.append(f"### {v.section_id}")
+            lines.append("")
+            lines.append(v.diagnosis.strip())
+            if v.evidence:
+                k = len(v.evidence)
+                items = "\n".join(
+                    f"- {item.replace(chr(10), ' ').strip()}" for item in v.evidence
+                )
+                lines.append("")
+                lines.append(f"<details><summary>Evidence ({k})</summary>")
+                lines.append("")
+                lines.append(items)
+                lines.append("</details>")
         return "\n".join(lines)
 
     def publish_findings(self, result: RunResult) -> None:
         comment = self.flag_comment(result)
-        if comment:
+        if not comment:
+            return
+        if not self.dry_run and self.pr_number:
+            self.run_command(["gh", "pr", "comment", self.pr_number, "--body", comment])
+        else:
             print(comment)
 
     def summarize(self, result: RunResult) -> None:
-        print(render_summary(result))
+        committed = not self.dry_run and any(r.validation_passed for r in result.repairs)
+        print(render_summary(result, fix_ref="committed to branch" if committed else None))
 
-    def _routed_for_pr(self, result: RunResult) -> list[tuple[Repair, Tier]]:
-        """(repair, tier) pairs whose tier means 'include in the companion PR'."""
+    def _routed_for_commit(self, result: RunResult) -> list[tuple[Repair, Tier]]:
+        """(repair, tier) pairs whose tier warrants inclusion in the doc-sync commit."""
         verdicts = {v.section_id: v for v in result.verdicts}
         out: list[tuple[Repair, Tier]] = []
         for repair_obj in result.repairs:
@@ -113,56 +146,52 @@ class RepoMarkdownDestination:
         return out
 
     def build_fix_plan(self, result: RunResult) -> "FixPlan | None":
-        """Construct the companion-PR plan, or None if nothing is applyable."""
-        applied = self._routed_for_pr(result)
+        """Plan the doc-sync commit, or None if nothing is applyable."""
+        applied = self._routed_for_commit(result)
         if not applied:
             return None
         edits_by_path: dict[str, list[tuple[DocSection, str]]] = {}
-        body_lines: list[str] = []
-        for repair_obj, tier in applied:
+        for repair_obj, _tier in applied:
             section = self.sections_by_id.get(repair_obj.section_id)
             if section is None:
                 continue
             edits_by_path.setdefault(section.path, []).append(
                 (section, repair_obj.new_content)
             )
-            body_lines.append(f"- **{section.id}** ({tier}): {repair_obj.rationale}")
         if not edits_by_path:
             return None
         file_writes: dict[str, str] = {}
         for path, edits in edits_by_path.items():
             original = (self.root / path).read_text()
             file_writes[path] = replace_sections(original, edits)
-        branch = f"docpulse/fix-{self.head_sha[:8]}"
-        commit_message = "docs: sync stale sections (DocPulse)"
-        pr_title = "\U0001f4dd DocPulse: sync docs with code changes"
-        pr_body = "DocPulse detected and fixed stale documentation:\n\n" + "\n".join(body_lines)
+        commit_message = "docs: sync stale sections with code changes (DocPulse)"
         commands = [
-            ["git", "checkout", "-b", branch],
             *[["git", "add", path] for path in sorted(file_writes)],
             ["git", "commit", "-m", commit_message],
-            ["git", "push", "-u", "origin", branch],
-            # TODO(Phase 6): add --base <base_branch> once the live path lands.
-            ["gh", "pr", "create", "--title", pr_title, "--body", pr_body],
+            ["git", "push", "origin", "HEAD"],
         ]
-        return FixPlan(branch, commit_message, pr_title, pr_body, file_writes, commands)
+        return FixPlan(
+            commit_message=commit_message, file_writes=file_writes, commands=commands
+        )
 
     def publish_fix(self, result: RunResult) -> str:
-        """Dry-run: return the planned branch name without running any command.
+        """Commit the doc fixes onto the current branch and push.
 
-        Phase 6 will execute `plan.commands` (and write `plan.file_writes`) here
-        when `dry_run` is False.
+        Dry-run: returns "" without running anything (callers print the plan).
+        Live: writes the doc edits, then runs git add/commit/push (a failing
+        command raises via the checked runner). Returns the commit message as a
+        short confirmation, or "" when there was nothing to fix.
         """
         plan = self.build_fix_plan(result)
         if plan is None:
             return ""
         if self.dry_run:
-            return plan.branch
-        # Phase 6 live path. NOTE: writes+commands are not atomic — a failure
-        # mid-way leaves the working tree partially modified. Phase 6 should
-        # stage to a temp area or add cleanup before shipping this.
+            return ""
+        # NOTE: writes+commands are not atomic — a failure mid-way leaves the
+        # working tree partially modified. The edits land on the current PR
+        # branch, so a re-run reconciles them.
         for path, new_text in plan.file_writes.items():
             (self.root / path).write_text(new_text)
         for command in plan.commands:
             self.run_command(command)
-        return plan.branch
+        return plan.commit_message

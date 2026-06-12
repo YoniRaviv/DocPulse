@@ -1,10 +1,13 @@
 import difflib
+import os
+import re
 import shlex
 import subprocess
 from pathlib import Path
 
 import typer
 
+from docpulse.command_runner import checked_runner
 from docpulse.config import Config, DocGlob, load_config
 from docpulse.context.git_context import GitContext
 from docpulse.destinations.repo_markdown import RepoMarkdownDestination
@@ -37,6 +40,26 @@ def _head_commit(root: Path) -> str:
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return "unknown"
     return result.stdout.strip() if result.returncode == 0 else "unknown"
+
+
+def _pr_number(env: dict[str, str]) -> str | None:
+    """PR number for `gh pr comment`, from explicit env or GITHUB_REF."""
+    explicit = env.get("DOCPULSE_PR_NUMBER") or env.get("PR_NUMBER")
+    if explicit:
+        return explicit
+    match = re.match(r"refs/pull/(\d+)/", env.get("GITHUB_REF", ""))
+    return match.group(1) if match else None
+
+
+def _build_destination(
+    *, root: Path, sections_by_id, config, head_sha, dry_run, pr_number=None
+):
+    run_command = checked_runner(root) if not dry_run else None
+    return RepoMarkdownDestination(
+        root, sections_by_id, config, head_sha,
+        run_command=run_command, dry_run=dry_run,
+        pr_number=pr_number,
+    )
 
 
 @app.command("index")
@@ -86,6 +109,9 @@ def check(
     two_dot: bool = typer.Option(
         False, "--two-dot", help="Diff literal base..head instead of merge-base base...head"
     ),
+    push: bool = typer.Option(
+        False, "--push", help="Live: post the flag comment to the PR (needs gh + GH_TOKEN)"
+    ),
 ) -> None:
     """Verify doc sections against base..head and report drift (exit 1 on stale)."""
     index_path = root / ".docpulse" / "index.json"
@@ -124,10 +150,20 @@ def check(
     except RuntimeError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from exc
-    dest = RepoMarkdownDestination(
-        root, {s.id: s for s in index.sections}, config, _head_commit(root)
+    dest = _build_destination(
+        root=root, sections_by_id={s.id: s for s in index.sections},
+        config=config, head_sha=_head_commit(root),
+        dry_run=not push, pr_number=_pr_number(dict(os.environ)),
     )
-    dest.publish_findings(result)
+    try:
+        dest.publish_findings(result)
+    except RuntimeError as exc:
+        typer.echo(
+            f"live publish failed: {exc}\n"
+            "hint: ensure gh is installed and GH_TOKEN has pull-requests:write",
+            err=True,
+        )
+        raise typer.Exit(2) from exc
     dest.summarize(result)
     raise typer.Exit(result.exit_code)
 
@@ -140,13 +176,16 @@ def repair_cmd(
     config_path: Path | None = typer.Option(None, "--config", help="Path to docpulse.yml"),
     model: str | None = typer.Option(None, "--model", help="LiteLLM model (overrides config)"),
     write: bool = typer.Option(
-        False, "--write", help="Apply fixes to doc files locally (no push; live PR is Phase 6)"
+        False, "--write", help="Apply fixes to doc files locally (no push)"
     ),
     two_dot: bool = typer.Option(
         False, "--two-dot", help="Diff literal base..head instead of merge-base base...head"
     ),
+    push: bool = typer.Option(
+        False, "--push", help="Live: commit+push doc fixes onto the current branch (needs GH_TOKEN)"
+    ),
 ) -> None:
-    """Verify, repair stale sections, and print the dry-run companion-PR plan."""
+    """Verify, repair stale sections, and print the dry-run fix plan."""
     index_path = root / ".docpulse" / "index.json"
     if not index_path.exists():
         typer.echo("no index found — run `docpulse index` first", err=True)
@@ -173,30 +212,44 @@ def repair_cmd(
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from exc
 
-    dest = RepoMarkdownDestination(
-        root, {s.id: s for s in index.sections}, config, _head_commit(root)
+    dest = _build_destination(
+        root=root, sections_by_id={s.id: s for s in index.sections},
+        config=config, head_sha=_head_commit(root),
+        dry_run=not push,
+        pr_number=_pr_number(dict(os.environ)),
     )
-    dest.publish_findings(result)
-    plan = dest.build_fix_plan(result)
-    if plan is not None:
-        for path, new_text in sorted(plan.file_writes.items()):
-            original = (root / path).read_text()
-            diff = difflib.unified_diff(
-                original.splitlines(), new_text.splitlines(),
-                fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="",
-            )
-            typer.echo("\n".join(diff))
-        if write:
-            for path, new_text in plan.file_writes.items():
-                (root / path).write_text(new_text)
-            typer.echo(
-                f"\nwrote {len(plan.file_writes)} file(s) on the working tree; "
-                f"branch/push/PR creation lands in Phase 6"
-            )
-        else:
-            typer.echo("\n# Phase 6 would run:")
-            for command in plan.commands:
-                typer.echo("  " + " ".join(shlex.quote(part) for part in command))
+    try:
+        dest.publish_findings(result)
+        plan = dest.build_fix_plan(result)
+        if plan is not None and push:
+            dest.publish_fix(result)
+            typer.echo("\npushed a doc-sync commit to the current branch")
+        elif plan is not None:
+            for path, new_text in sorted(plan.file_writes.items()):
+                original = (root / path).read_text()
+                diff = difflib.unified_diff(
+                    original.splitlines(), new_text.splitlines(),
+                    fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="",
+                )
+                typer.echo("\n".join(diff))
+            if write:
+                for path, new_text in plan.file_writes.items():
+                    (root / path).write_text(new_text)
+                typer.echo(
+                    f"\nwrote {len(plan.file_writes)} file(s) on the working tree; "
+                    f"re-run with --push to commit and push to the current branch"
+                )
+            else:
+                typer.echo("\n# --push would run:")
+                for command in plan.commands:
+                    typer.echo("  " + " ".join(shlex.quote(part) for part in command))
+    except RuntimeError as exc:
+        typer.echo(
+            f"live publish failed: {exc}\n"
+            "hint: ensure gh is installed and GH_TOKEN has contents+pull-requests:write",
+            err=True,
+        )
+        raise typer.Exit(2) from exc
     dest.summarize(result)
     raise typer.Exit(result.exit_code)
 

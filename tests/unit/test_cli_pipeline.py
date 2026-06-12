@@ -72,7 +72,7 @@ def test_repair_prints_diff_and_dry_run_commands(monkeypatch, tmp_path):
     out = runner.invoke(app, ["repair", "--root", str(tmp_path), "--base", "main"])
     assert out.exit_code == 1, out.output
     assert "new body" in out.output            # unified diff of the proposed fix
-    assert "gh pr create" in out.output         # dry-run command listing
+    assert "git push origin HEAD" in out.output # dry-run command listing
     assert (docs / "a.md").read_text() == "# X\n\nold body\n"  # not written without --write
 
 

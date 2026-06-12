@@ -1,3 +1,4 @@
+import pytest
 from pathlib import Path
 
 from docpulse.config import Config, DocGlob
@@ -117,11 +118,15 @@ def test_build_fix_plan_groups_edits_and_routes(tmp_path):
     )
     plan = dest.build_fix_plan(result)
     assert plan is not None
-    assert plan.branch == "docpulse/fix-abcdef12"
     assert "docs/auth.md" in plan.file_writes
     assert "username" in plan.file_writes["docs/auth.md"]
-    assert "user->username" in plan.pr_body
-    assert ["gh", "pr", "create", "--title", plan.pr_title, "--body", plan.pr_body] in plan.commands
+    # commands: git add, git commit, git push origin HEAD
+    assert ["git", "add", "docs/auth.md"] in plan.commands
+    assert ["git", "commit", "-m", plan.commit_message] in plan.commands
+    assert ["git", "push", "origin", "HEAD"] in plan.commands
+    # no gh pr create or branch-checkout commands (doc-sync commit only)
+    assert not any(c[:3] == ["gh", "pr", "create"] for c in plan.commands)
+    assert not any(c[:3] == ["git", "checkout", "-b"] for c in plan.commands)
 
 
 def test_build_fix_plan_skips_failed_validation(tmp_path):
@@ -140,7 +145,7 @@ def test_build_fix_plan_skips_failed_validation(tmp_path):
     assert dest.build_fix_plan(result) is None
 
 
-def test_publish_fix_dry_run_returns_branch_without_running_commands(tmp_path):
+def test_publish_fix_dry_run_returns_empty_without_running_commands(tmp_path):
     (tmp_path / "docs").mkdir()
     doc = tmp_path / "docs" / "auth.md"
     doc.write_text("# Login\n\nCall login with a user.\n")
@@ -158,9 +163,9 @@ def test_publish_fix_dry_run_returns_branch_without_running_commands(tmp_path):
                         confidence=0.95, validation_passed=True, rationale="r")],
         suspects_checked=1, suspects_total=1, tokens_used=0, exit_code=1,
     )
-    branch = dest.publish_fix(result)
-    assert branch == "docpulse/fix-abcdef12"
-    assert ran == []  # dry-run: no git/gh commands executed
+    ret = dest.publish_fix(result)
+    assert ret == ""  # dry-run: returns empty string
+    assert ran == []  # dry-run: no git commands executed
     assert doc.read_text() == "# Login\n\nCall login with a user.\n"  # file untouched in dry-run
 
 
@@ -193,3 +198,126 @@ def test_build_fix_plan_groups_two_repairs_in_one_file(tmp_path):
     written = plan.file_writes["docs/api.md"]
     assert "NEW A" in written and "NEW B" in written
     assert "old a" not in written and "old b" not in written
+
+
+def test_flag_comment_uses_heading_trail_and_collapsed_evidence():
+    section = DocSection(
+        id="docs/concepts/models.md#basic-model-usage/model-methods",
+        path="docs/concepts/models.md",
+        heading_path=["Basic model usage", "Model methods and properties"],
+        content="c", content_hash="h", mentions=[], start_line=1, end_line=2,
+    )
+    result = RunResult(
+        verdicts=[Verdict(section_id=section.id, status="stale", confidence=0.8,
+                          diagnosis="model_copy default changed",
+                          evidence=["pydantic/main.py:393", "docs/concepts/models.md:160"])],
+        repairs=[], suspects_checked=1, suspects_total=1, tokens_used=0, exit_code=1,
+    )
+    comment = _dest([section]).flag_comment(result)
+    assert "### docs/concepts/models.md" in comment
+    assert "Basic model usage › Model methods and properties" in comment
+    assert "model_copy default changed" in comment
+    assert "<details><summary>Evidence (2)</summary>" in comment
+    assert "- pydantic/main.py:393" in comment
+    assert "(docs/concepts/models.md)" not in comment  # no redundant path duplication
+
+
+def test_flag_comment_singular_count():
+    section = _section()
+    result = RunResult(
+        verdicts=[Verdict(section_id=section.id, status="stale", confidence=0.9,
+                          diagnosis="d", evidence=[])],
+        repairs=[], suspects_checked=1, suspects_total=1, tokens_used=0, exit_code=1,
+    )
+    assert "**1 section**" in _dest([section]).flag_comment(result)
+
+
+def _stale_result(section):
+    return RunResult(
+        verdicts=[Verdict(section_id=section.id, status="stale", confidence=0.8,
+                          diagnosis="param renamed", evidence=["auth.py:2"])],
+        repairs=[], suspects_checked=1, suspects_total=1, tokens_used=0, exit_code=1,
+    )
+
+
+def test_publish_findings_live_posts_comment_to_pr():
+    section = _section()
+    calls = []
+    dest = RepoMarkdownDestination(
+        root=Path("."), sections_by_id={section.id: section},
+        config=Config(docs=[DocGlob(path="**/*.md")]), head_sha="abcdef1234567890",
+        run_command=lambda args: calls.append(args) or "",
+        dry_run=False, pr_number="42",
+    )
+    dest.publish_findings(_stale_result(section))
+    assert calls == [["gh", "pr", "comment", "42", "--body", dest.flag_comment(_stale_result(section))]]
+
+
+def test_publish_findings_live_without_pr_number_prints(capsys):
+    section = _section()
+    dest = RepoMarkdownDestination(
+        root=Path("."), sections_by_id={section.id: section},
+        config=Config(docs=[DocGlob(path="**/*.md")]), head_sha="abcdef1234567890",
+        run_command=lambda args: "", dry_run=False, pr_number=None,
+    )
+    dest.publish_findings(_stale_result(section))
+    assert "param renamed" in capsys.readouterr().out  # falls back to print
+
+
+def _fixable_result(section):
+    return RunResult(
+        verdicts=[Verdict(section_id=section.id, status="stale", confidence=0.95,
+                          diagnosis="d", evidence=[])],
+        repairs=[Repair(section_id=section.id, new_content="# login\nfixed",
+                        confidence=0.95, validation_passed=True, rationale="r")],
+        suspects_checked=1, suspects_total=1, tokens_used=0, exit_code=1,
+    )
+
+
+def test_publish_fix_live_commits_and_pushes(tmp_path):
+    md = tmp_path / "docs" / "auth.md"
+    md.parent.mkdir(parents=True)
+    md.write_text("# login\nold\n")
+    section = DocSection(id="docs/auth.md#login", path="docs/auth.md",
+                         heading_path=["login"], content="# login\nold",
+                         content_hash="h", mentions=[], start_line=1, end_line=2)
+    calls = []
+
+    def fake_runner(args):
+        calls.append(args)
+        return ""
+
+    dest = RepoMarkdownDestination(
+        root=tmp_path, sections_by_id={section.id: section},
+        config=Config(docs=[DocGlob(path="**/*.md")]), head_sha="abcdef1234567890",
+        run_command=fake_runner, dry_run=False,
+    )
+    commit_msg = dest.publish_fix(_fixable_result(section))
+    assert commit_msg == "docs: sync stale sections with code changes (DocPulse)"  # returns the commit message
+    assert md.read_text().splitlines()[:2] == ["# login", "fixed"]  # file written
+    # first command(s) are git add
+    assert calls[0][:2] == ["git", "add"]
+    # last command is git push origin HEAD
+    assert calls[-1] == ["git", "push", "origin", "HEAD"]
+    # no gh pr create anywhere
+    assert not any(c[:3] == ["gh", "pr", "create"] for c in calls)
+
+
+def test_publish_fix_live_propagates_runner_error(tmp_path):
+    md = tmp_path / "docs" / "auth.md"
+    md.parent.mkdir(parents=True)
+    md.write_text("# login\nold\n")
+    section = DocSection(id="docs/auth.md#login", path="docs/auth.md",
+                         heading_path=["login"], content="# login\nold",
+                         content_hash="h", mentions=[], start_line=1, end_line=2)
+
+    def boom(args):
+        raise RuntimeError("no write permission")
+
+    dest = RepoMarkdownDestination(
+        root=tmp_path, sections_by_id={section.id: section},
+        config=Config(docs=[DocGlob(path="**/*.md")]), head_sha="abcdef1234567890",
+        run_command=boom, dry_run=False,
+    )
+    with pytest.raises(RuntimeError, match="no write permission"):
+        dest.publish_fix(_fixable_result(section))
