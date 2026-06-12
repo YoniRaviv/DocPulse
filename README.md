@@ -1,5 +1,7 @@
 # DocPulse
 
+![DocPulse — docs that stay in sync with the heartbeat of the codebase](https://raw.githubusercontent.com/YoniRaviv/DocPulse/main/.github/assets/banner.png)
+
 > Docs that stay in sync with the heartbeat of the codebase.
 
 DocPulse detects documentation sections invalidated by a pull request's code
