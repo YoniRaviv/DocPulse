@@ -1,0 +1,24 @@
+name: DocPulse (dogfood)
+
+on:
+  pull_request:
+
+jobs:
+  docpulse:
+    runs-on: ubuntu-latest
+    # Skip on fork PRs (no access to ANTHROPIC_API_KEY secret).
+    if: ${{ github.repository == github.event.pull_request.head.repo.full_name }}
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./
+        with:
+          mode: check
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCPULSE_PR_NUMBER: ${{ github.event.pull_request.number }}
