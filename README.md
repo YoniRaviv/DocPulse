@@ -106,8 +106,12 @@ Secrets come only from env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …).
 ## Jenkins / any CI
 
 ```bash
+# The image entrypoint is env-driven (it always runs `index` then the chosen
+# mode with --push). Configure it with -e vars, not CLI args:
 docker run --rm \
   -e ANTHROPIC_API_KEY -e GH_TOKEN \
+  -e DOCPULSE_MODE=check \
+  -e DOCPULSE_BASE_REF=origin/main \
   -v "$PWD:/work" -w /work \
-  ghcr.io/yoniraviv/docpulse:latest check --base origin/main --push
+  ghcr.io/yoniraviv/docpulse:latest
 ```
