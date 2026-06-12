@@ -1,4 +1,4 @@
-name: "DocPulse"
+name: "DocPulse — Self-Healing Docs"
 description: "Detect doc sections invalidated by a PR's code changes and propose fixes."
 branding:
   icon: "activity"
